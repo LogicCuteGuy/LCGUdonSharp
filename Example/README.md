@@ -1,6 +1,8 @@
 # LCG Manual Packet Networking showcase
 
 The example scripts are available directly from the package's `Example/` folder.
+The included `.asmdef` and `.USharp.asset` files register this folder as a UdonSharp
+assembly; keep both files with the scripts.
 
 The scripts are intentionally scene-ready rather than tied to a prefab. This makes the
 network boundary visible and lets you test different Zone sizes and exit modes.
