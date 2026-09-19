@@ -1,0 +1,10 @@
+{
+  "name": "LogicCuteGuy.LCGUdonSharp.Installer.Editor",
+  "rootNamespace": "LogicCuteGuy.LCGUdonSharp.Installer",
+  "references": [],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "autoReferenced": true,
+  "noEngineReferences": false
+}
