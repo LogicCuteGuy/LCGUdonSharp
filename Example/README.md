@@ -1,6 +1,6 @@
 # LCG Manual Packet Networking showcase
 
-Import this sample from **Window > Package Manager > LCGUdonSharp > Samples**.
+The example scripts are available directly from the package's `Example/` folder.
 
 The scripts are intentionally scene-ready rather than tied to a prefab. This makes the
 network boundary visible and lets you test different Zone sizes and exit modes.

@@ -8,13 +8,6 @@
   "author": {
     "name": "LogicCuteGuy"
   },
-  "samples": [
-    {
-      "displayName": "LCG Manual Packet Networking",
-      "description": "Scene-ready scripts demonstrating packet fields, packet methods, targeted delivery, Zones, and manual object sync.",
-      "path": "UdonSharp/Samples~/LCG Manual Packet Networking"
-    }
-  ],
   "vpmDependencies": {
     "com.vrchat.worlds": "3.10.5"
   }
