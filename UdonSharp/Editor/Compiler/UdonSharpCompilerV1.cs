@@ -29,6 +29,7 @@ using UdonSharp.Serialization;
 using UdonSharpEditor;
 using UnityEditor;
 using VRC.SDK3.UdonNetworkCalling;
+using VRC.SDKBase;
 using VRC.Udon;
 using VRC.Udon.Common.Interfaces;
 using Debug = UnityEngine.Debug;
@@ -793,6 +794,14 @@ namespace UdonSharp.Compiler
                 if (syncModeAttribute != null)
                     syncMode = syncModeAttribute.behaviourSyncMode;
 
+                bool hasLCGPackets = moduleEmitContext.DeclaredFields.Any(field => field.HasAttribute<LCGPacketAttribute>()) ||
+                                     moduleEmitContext.DeclaredRootMethods.Any(method => method.HasAttribute<LCGPacketAttribute>());
+                if (hasLCGPackets && syncMode == BehaviourSyncMode.Continuous)
+                {
+                    compilationContext.AddDiagnostic(DiagnosticSeverity.Error, moduleEmitContext.CurrentNode,
+                        "LCG packet behaviours must use Manual or NoVariableSync mode; Continuous networking is not supported.");
+                }
+
                 moduleBinding.programAsset.behaviourSyncMode = syncMode;
                     
                 Dictionary<string, FieldDefinition> fieldDefinitions = new Dictionary<string, FieldDefinition>();
@@ -803,6 +812,7 @@ namespace UdonSharp.Compiler
                         UdonSharpUtils.LogError($"Could not get type for field {symbol.Name}");
                     
                     CheckSyncCompatibility(symbol, compilationContext, moduleEmitContext);
+                    CheckLCGPacketCompatibility(symbol, compilationContext);
 
                     fieldDefinitions.Add(symbol.Name, new FieldDefinition(symbol.Name, symbolSystemType, symbol.Type.UdonType.SystemType, symbol.SyncMode, symbol.IsSerialized, symbol.SymbolAttributes.ToList()));
                 }
@@ -910,6 +920,51 @@ namespace UdonSharp.Compiler
             }
         }
 
+        private static void CheckLCGPacketCompatibility(FieldSymbol field, CompilationContext context)
+        {
+            LCGPacketAttribute packetAttribute = field.GetAttribute<LCGPacketAttribute>();
+            if (packetAttribute == null)
+                return;
+
+            Location location = field.RoslynSymbol.Locations.FirstOrDefault();
+            if (field.IsStatic || field.IsConst || field.IsReadonly)
+                context.AddDiagnostic(DiagnosticSeverity.Error, location,
+                    $"LCG packet field '{field.Name}' must be a mutable instance field.");
+
+            if (field.HasAttribute<UdonSyncedAttribute>())
+                context.AddDiagnostic(DiagnosticSeverity.Error, location,
+                    $"LCG packet field '{field.Name}' cannot also be marked [UdonSynced].");
+
+            TypeSymbol packetType = field.Type;
+            if (packetType.IsEnum || (packetType.IsArray && packetType.ElementType.IsEnum))
+                packetType = packetType.UdonType;
+
+            if (!packetType.IsExtern || !UdonNetworkTypes.CanSync(packetType.UdonType.SystemType))
+                context.AddDiagnostic(DiagnosticSeverity.Error, location,
+                    $"LCG packet field '{field.Name}' type '{field.Type}' is not supported by VRChat networking.");
+
+            if (string.IsNullOrEmpty(packetAttribute.Callback))
+                return;
+
+            IMethodSymbol[] callbacks = field.RoslynSymbol.ContainingType.GetMembers(packetAttribute.Callback)
+                .OfType<IMethodSymbol>()
+                .ToArray();
+            if (callbacks.Length != 1)
+            {
+                context.AddDiagnostic(DiagnosticSeverity.Error, location,
+                    $"LCG packet field '{field.Name}' callback '{packetAttribute.Callback}' must resolve to exactly one method.");
+                return;
+            }
+
+            IMethodSymbol callback = callbacks[0];
+            bool validCallback = !callback.IsStatic && callback.DeclaredAccessibility == Accessibility.Public &&
+                                 callback.ReturnsVoid && callback.Parameters.Length == 1 &&
+                                 callback.Parameters[0].Type.ToDisplayString() == typeof(VRCPlayerApi).FullName;
+            if (!validCallback)
+                context.AddDiagnostic(DiagnosticSeverity.Error, callback.Locations.FirstOrDefault(),
+                    $"LCG packet callback '{packetAttribute.Callback}' must be 'public void {packetAttribute.Callback}(VRCPlayerApi sender)'.");
+        }
+
         private static readonly object _assembleLock = new object();
 
         private static void AssembleProgram(CompilationContext compilationContext, (INamedTypeSymbol, ModuleBinding) binding,
@@ -923,6 +978,9 @@ namespace UdonSharp.Compiler
             rootBinding.programAsset.AssembleCsProgram(generatedUasm, rootBinding.assemblyModule.GetHeapSize());
             rootBinding.programAsset.SetUdonAssembly("");
             rootBinding.programAsset.SetNetworkCallingMetadata(CollectNetworkMetadataFromAttributes(compilationContext, moduleEmitContext));
+            CollectLCGCallbackMetadata(compilationContext, moduleEmitContext, out string[] callbackSources,
+                out string[] callbackEvents, out string[] callbackParameters);
+            rootBinding.programAsset.SetLCGCallbackMetadata(callbackSources, callbackEvents, callbackParameters);
 
             IUdonProgram program = rootBinding.programAsset.GetRealProgram();
 
@@ -1006,6 +1064,8 @@ namespace UdonSharp.Compiler
             foreach (var method in moduleEmitContext.DeclaredRootMethods)
             {
                 var networkCallableAttribute = method.GetAttribute<NetworkCallableAttribute>();
+                if (networkCallableAttribute == null && method.HasAttribute<LCGPacketAttribute>())
+                    networkCallableAttribute = new NetworkCallableAttribute(100);
                 if (networkCallableAttribute != null)
                 {
                     var usbLayout = context.GetUsbMethodLayout(method, moduleEmitContext);
@@ -1023,6 +1083,33 @@ namespace UdonSharp.Compiler
                 }
             }
             return metadataList.ToArray();
+        }
+
+        private static void CollectLCGCallbackMetadata(CompilationContext context, EmitContext moduleEmitContext,
+            out string[] sourceNames, out string[] eventNames, out string[] parameterNames)
+        {
+            var sources = new List<string>();
+            var events = new List<string>();
+            var parameters = new List<string>();
+            foreach (FieldSymbol field in moduleEmitContext.DeclaredFields)
+            {
+                LCGPacketAttribute packet = field.GetAttribute<LCGPacketAttribute>();
+                if (packet == null || string.IsNullOrEmpty(packet.Callback))
+                    continue;
+                MethodSymbol callback = moduleEmitContext.DeclaredRootMethods
+                    .FirstOrDefault(method => method.Name == packet.Callback);
+                if (callback == null)
+                    continue;
+                CompilationContext.MethodExportLayout layout = context.GetUsbMethodLayout(callback, moduleEmitContext);
+                if (layout == null || layout.ParameterExportNames.Length != 1)
+                    continue;
+                sources.Add(packet.Callback);
+                events.Add(layout.ExportMethodName);
+                parameters.Add(layout.ParameterExportNames[0]);
+            }
+            sourceNames = sources.ToArray();
+            eventNames = events.ToArray();
+            parameterNames = parameters.ToArray();
         }
     }
 }

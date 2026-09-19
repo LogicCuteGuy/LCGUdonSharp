@@ -3,6 +3,7 @@ using System;
 using Microsoft.CodeAnalysis;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Reflection;
 using UdonSharp.Compiler.Binder;
 
 namespace UdonSharp.Compiler.Symbols
@@ -165,7 +166,41 @@ namespace UdonSharp.Compiler.Symbols
                 try
                 {
                     if (type.IsExtern)
-                        attributes.Add((Attribute)Activator.CreateInstance(type.UdonType.SystemType, attributeArgs));
+                    {
+                        Attribute instance = (Attribute)Activator.CreateInstance(type.UdonType.SystemType, attributeArgs);
+
+                        foreach (KeyValuePair<string, TypedConstant> namedArgument in attribute.NamedArguments)
+                        {
+                            try
+                            {
+                                object value = namedArgument.Value.Value;
+                                if (namedArgument.Value.Type?.TypeKind == TypeKind.Enum)
+                                {
+                                    TypeSymbol enumType = context.GetTypeSymbol(namedArgument.Value.Type);
+                                    value = Enum.ToObject(enumType.UdonType.SystemType, value);
+                                }
+
+                                PropertyInfo property = instance.GetType().GetProperty(namedArgument.Key,
+                                    BindingFlags.Public | BindingFlags.Instance);
+                                if (property != null && property.CanWrite)
+                                {
+                                    property.SetValue(instance, value);
+                                    continue;
+                                }
+
+                                FieldInfo field = instance.GetType().GetField(namedArgument.Key,
+                                    BindingFlags.Public | BindingFlags.Instance);
+                                field?.SetValue(instance, value);
+                            }
+                            catch (Exception)
+                            {
+                                // Preserve the attribute instance, matching the previous behavior where named
+                                // arguments were ignored, if a third-party attribute has an unsupported value shape.
+                            }
+                        }
+
+                        attributes.Add(instance);
+                    }
                 }
                 catch (Exception)
                 {

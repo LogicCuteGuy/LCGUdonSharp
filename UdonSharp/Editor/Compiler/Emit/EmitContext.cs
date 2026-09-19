@@ -11,6 +11,8 @@ using UdonSharp.Compiler.Symbols;
 using UdonSharp.Compiler.Udon;
 using UdonSharp.Core;
 using UnityEngine;
+using VRC.SDKBase;
+using VRC.Udon;
 using NotSupportedException = UdonSharp.Core.NotSupportedException;
 
 #if UDONSHARP_DEBUG
@@ -40,6 +42,9 @@ namespace UdonSharp.Compiler.Emit
 
         private Value _returnValue;
         private Value _udonReturnValue;
+        private Value _lcgRuntimeValue;
+        private Value _lcgReceiverIdValue;
+        private Value _lcgZoneIdValue;
 
         internal MethodSymbol CurrentEmitMethod { get; private set; }
 
@@ -176,6 +181,7 @@ namespace UdonSharp.Compiler.Emit
             DeclaredFields = userFields.ToImmutableArray();
             DeclaredRootMethods = rootMethods.ToImmutableArray();
             InitConstFields();
+            InitializeLCGPacketAbi();
 
             HashSet<MethodSymbol> emittedSet = new HashSet<MethodSymbol>();
             HashSet<MethodSymbol> setToEmit = new HashSet<MethodSymbol>();
@@ -242,6 +248,176 @@ namespace UdonSharp.Compiler.Emit
                 _recursiveStackVal.DefaultValue = new object[_maxRecursiveStackPush];
             
             DebugInfo.FinalizeAssemblyInfo();
+        }
+
+        private void InitializeLCGPacketAbi()
+        {
+            if (!DeclaredFields.Any(field => field.HasAttribute<LCGPacketAttribute>()) &&
+                !DeclaredRootMethods.Any(method => method.HasAttribute<LCGPacketAttribute>()))
+                return;
+
+            EnsureLCGPacketAbi();
+        }
+
+        private void EnsureLCGPacketAbi()
+        {
+            if (_lcgRuntimeValue != null)
+                return;
+
+            _lcgRuntimeValue = RootTable.CreateParameterValue("__lcgRuntime", GetTypeSymbol(typeof(UdonBehaviour)));
+            _lcgReceiverIdValue = RootTable.CreateParameterValue("__lcgReceiverId", GetTypeSymbol(SpecialType.System_Int32));
+            _lcgZoneIdValue = RootTable.CreateParameterValue("__lcgZoneId", GetTypeSymbol(SpecialType.System_Int32));
+        }
+
+        internal void EmitLCGPacketFieldAssignment(FieldSymbol field, Value assignedValue, bool force = false)
+        {
+            if (field == null || !field.HasAttribute<LCGPacketAttribute>())
+                return;
+
+            EnsureLCGPacketAbi();
+
+            int typeTag = GetLCGPacketTypeTag(field.Type);
+            if (typeTag == 0)
+                throw new CompilerException($"LCG packet field '{field.Name}' has no wire encoder for type '{field.Type}'.");
+
+            TypeSymbol stringType = GetTypeSymbol(SpecialType.System_String);
+            TypeSymbol objectType = GetTypeSymbol(SpecialType.System_Object);
+            TypeSymbol udonBehaviourType = GetTypeSymbol(typeof(UdonBehaviour));
+            MethodSymbol setProgramVariable = udonBehaviourType.GetMembers<MethodSymbol>("SetProgramVariable", this)
+                .First(method => method.Parameters.Length == 2 && method.Parameters[0].Type == stringType &&
+                                 method.Parameters[1].Type == objectType);
+            MethodSymbol sendCustomEvent = udonBehaviourType.GetMembers<MethodSymbol>("SendCustomEvent", this)
+                .First(method => method.Parameters.Length == 1 && method.Parameters[0].Type == stringType);
+            BoundAccessExpression runtimeAccess = BoundAccessExpression.BindAccess(_lcgRuntimeValue);
+
+            EmitRuntimeRegister(setProgramVariable, runtimeAccess, "__lcgSenderReceiverId",
+                BoundAccessExpression.BindAccess(_lcgReceiverIdValue));
+            EmitRuntimeRegister(setProgramVariable, runtimeAccess, "__lcgSenderZoneId",
+                BoundAccessExpression.BindAccess(_lcgZoneIdValue));
+            EmitRuntimeRegister(setProgramVariable, runtimeAccess, "__lcgSenderType",
+                BoundAccessExpression.BindAccess(GetConstantValue(GetTypeSymbol(SpecialType.System_Int32), typeTag)));
+            EmitRuntimeRegister(setProgramVariable, runtimeAccess, "__lcgSenderAddress",
+                BoundAccessExpression.BindAccess(GetConstantValue(stringType, field.Name)));
+            EmitRuntimeRegister(setProgramVariable, runtimeAccess, "__lcgSenderValue",
+                BoundAccessExpression.BindAccess(assignedValue));
+            EmitRuntimeRegister(setProgramVariable, runtimeAccess, "__lcgSenderForce",
+                BoundAccessExpression.BindAccess(GetConstantValue(GetTypeSymbol(SpecialType.System_Boolean), force)));
+
+            Emit(BoundInvocationExpression.CreateBoundInvocation(this, CurrentNode, sendCustomEvent, runtimeAccess,
+                new BoundExpression[]
+                {
+                    BoundAccessExpression.BindAccess(GetConstantValue(stringType, "__lcgSendField"))
+                }));
+        }
+
+        internal void EmitLCGPacketMethodInvocation(BoundExpression receiverExpression, MethodSymbol packetMethod,
+            BoundExpression targetExpression, BoundExpression[] arguments, bool targetedPlayer)
+        {
+            EnsureLCGPacketAbi();
+            TypeSymbol stringType = GetTypeSymbol(SpecialType.System_String);
+            TypeSymbol objectType = GetTypeSymbol(SpecialType.System_Object);
+            TypeSymbol intType = GetTypeSymbol(SpecialType.System_Int32);
+            TypeSymbol udonBehaviourType = GetTypeSymbol(typeof(UdonBehaviour));
+            MethodSymbol setProgramVariable = udonBehaviourType.GetMembers<MethodSymbol>("SetProgramVariable", this)
+                .First(method => method.Parameters.Length == 2 && method.Parameters[0].Type == stringType &&
+                                 method.Parameters[1].Type == objectType);
+            MethodSymbol getProgramVariable = udonBehaviourType.GetMembers<MethodSymbol>("GetProgramVariable", this)
+                .First(method => method.Parameters.Length == 1 && method.Parameters[0].Type == stringType);
+            MethodSymbol sendCustomEvent = udonBehaviourType.GetMembers<MethodSymbol>("SendCustomEvent", this)
+                .First(method => method.Parameters.Length == 1 && method.Parameters[0].Type == stringType);
+
+            Value receiverValue = receiverExpression.EmitValue(this);
+            BoundAccessExpression receiverAccess = BoundAccessExpression.BindAccess(receiverValue);
+            BoundAccessExpression runtimeAccess = BoundAccessExpression.BindAccess(_lcgRuntimeValue);
+            BoundInvocationExpression receiverIdRead = BoundInvocationExpression.CreateBoundInvocation(this,
+                CurrentNode, getProgramVariable, receiverAccess, new BoundExpression[]
+                {
+                    BoundAccessExpression.BindAccess(GetConstantValue(stringType, "__lcgReceiverId"))
+                });
+            BoundInvocationExpression zoneIdRead = BoundInvocationExpression.CreateBoundInvocation(this,
+                CurrentNode, getProgramVariable, receiverAccess, new BoundExpression[]
+                {
+                    BoundAccessExpression.BindAccess(GetConstantValue(stringType, "__lcgZoneId"))
+                });
+
+            EmitRuntimeRegister(setProgramVariable, runtimeAccess, "__lcgSenderReceiverId", receiverIdRead);
+            EmitRuntimeRegister(setProgramVariable, runtimeAccess, "__lcgSenderZoneId", zoneIdRead);
+            EmitRuntimeRegister(setProgramVariable, runtimeAccess, "__lcgSenderAddress",
+                BoundAccessExpression.BindAccess(GetConstantValue(stringType, packetMethod.Name)));
+            EmitRuntimeRegister(setProgramVariable, runtimeAccess, "__lcgSenderArgCount",
+                BoundAccessExpression.BindAccess(GetConstantValue(intType, arguments.Length)));
+
+            if (targetedPlayer)
+            {
+                EmitRuntimeRegister(setProgramVariable, runtimeAccess, "__lcgSenderTargetMode",
+                    BoundAccessExpression.BindAccess(GetConstantValue(intType, -1)));
+                EmitRuntimeRegister(setProgramVariable, runtimeAccess, "__lcgSenderPlayer", targetExpression);
+            }
+            else
+            {
+                EmitRuntimeRegister(setProgramVariable, runtimeAccess, "__lcgSenderTargetMode",
+                    new BoundCastExpression(CurrentNode, targetExpression, intType, true));
+                EmitRuntimeRegister(setProgramVariable, runtimeAccess, "__lcgSenderPlayer",
+                    BoundAccessExpression.BindAccess(GetConstantValue(GetTypeSymbol(typeof(VRCPlayerApi)), null)));
+            }
+
+            for (int i = 0; i < arguments.Length; i++)
+            {
+                int typeTag = GetLCGPacketTypeTag(packetMethod.Parameters[i].Type);
+                if (typeTag == 0)
+                    throw new CompilerException($"LCG packet method '{packetMethod.Name}' argument {i + 1} has no wire encoder for type '{packetMethod.Parameters[i].Type}'.");
+                EmitRuntimeRegister(setProgramVariable, runtimeAccess, $"__lcgSenderArgType{i}",
+                    BoundAccessExpression.BindAccess(GetConstantValue(intType, typeTag)));
+                EmitRuntimeRegister(setProgramVariable, runtimeAccess, $"__lcgSenderArg{i}", arguments[i]);
+            }
+
+            Emit(BoundInvocationExpression.CreateBoundInvocation(this, CurrentNode, sendCustomEvent, runtimeAccess,
+                new BoundExpression[]
+                {
+                    BoundAccessExpression.BindAccess(GetConstantValue(stringType, "__lcgSendMethod"))
+                }));
+        }
+
+        private void EmitRuntimeRegister(MethodSymbol setter, BoundAccessExpression runtimeAccess, string name,
+            BoundExpression value)
+        {
+            TypeSymbol stringType = GetTypeSymbol(SpecialType.System_String);
+            Emit(BoundInvocationExpression.CreateBoundInvocation(this, CurrentNode, setter, runtimeAccess,
+                new[]
+                {
+                    BoundAccessExpression.BindAccess(GetConstantValue(stringType, name)),
+                    value
+                }));
+        }
+
+        internal static int GetLCGPacketTypeTag(TypeSymbol type)
+        {
+            bool isArray = type.IsArray;
+            TypeSymbol elementType = isArray ? type.ElementType : type;
+            Type systemType = elementType.UdonType.SystemType;
+            int tag;
+            if (systemType == typeof(bool)) tag = (int)LCGPacketType.Boolean;
+            else if (systemType == typeof(sbyte)) tag = (int)LCGPacketType.SByte;
+            else if (systemType == typeof(byte)) tag = (int)LCGPacketType.Byte;
+            else if (systemType == typeof(short)) tag = (int)LCGPacketType.Int16;
+            else if (systemType == typeof(ushort)) tag = (int)LCGPacketType.UInt16;
+            else if (systemType == typeof(int)) tag = (int)LCGPacketType.Int32;
+            else if (systemType == typeof(uint)) tag = (int)LCGPacketType.UInt32;
+            else if (systemType == typeof(long)) tag = (int)LCGPacketType.Int64;
+            else if (systemType == typeof(ulong)) tag = (int)LCGPacketType.UInt64;
+            else if (systemType == typeof(float)) tag = (int)LCGPacketType.Single;
+            else if (systemType == typeof(double)) tag = (int)LCGPacketType.Double;
+            else if (systemType == typeof(char)) tag = (int)LCGPacketType.Char;
+            else if (systemType == typeof(string)) tag = (int)LCGPacketType.String;
+            else if (systemType == typeof(Vector2)) tag = (int)LCGPacketType.Vector2;
+            else if (systemType == typeof(Vector3)) tag = (int)LCGPacketType.Vector3;
+            else if (systemType == typeof(Vector4)) tag = (int)LCGPacketType.Vector4;
+            else if (systemType == typeof(Quaternion)) tag = (int)LCGPacketType.Quaternion;
+            else if (systemType == typeof(Color)) tag = (int)LCGPacketType.Color;
+            else if (systemType == typeof(Color32)) tag = (int)LCGPacketType.Color32;
+            else return 0;
+
+            return isArray ? tag | (int)LCGPacketType.ArrayFlag : tag;
         }
 
         private void InitConstFields()

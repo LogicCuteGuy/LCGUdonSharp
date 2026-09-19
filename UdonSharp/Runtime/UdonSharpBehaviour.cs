@@ -222,6 +222,30 @@ namespace UdonSharp
             eventMethod?.Invoke(this, new object[] { parameter0, parameter1, parameter2, parameter3, parameter4, parameter5, parameter6, parameter7 });
         }
 
+        /// <summary>Sends an [LCGPacket] method to one player's owned LCGRuntimePlayer mailbox.</summary>
+        [PublicAPI] public void SendLCGNetworkEvent(VRCPlayerApi player, string eventName) => InvokeLCGLocal(player, eventName, Array.Empty<object>());
+        [PublicAPI] public void SendLCGNetworkEvent(VRCPlayerApi player, string eventName, object parameter0) => InvokeLCGLocal(player, eventName, new[] { parameter0 });
+        [PublicAPI] public void SendLCGNetworkEvent(VRCPlayerApi player, string eventName, object parameter0, object parameter1) => InvokeLCGLocal(player, eventName, new[] { parameter0, parameter1 });
+        [PublicAPI] public void SendLCGNetworkEvent(VRCPlayerApi player, string eventName, object parameter0, object parameter1, object parameter2) => InvokeLCGLocal(player, eventName, new[] { parameter0, parameter1, parameter2 });
+        [PublicAPI] public void SendLCGNetworkEvent(VRCPlayerApi player, string eventName, object parameter0, object parameter1, object parameter2, object parameter3) => InvokeLCGLocal(player, eventName, new[] { parameter0, parameter1, parameter2, parameter3 });
+        [PublicAPI] public void SendLCGNetworkEvent(VRCPlayerApi player, string eventName, object parameter0, object parameter1, object parameter2, object parameter3, object parameter4) => InvokeLCGLocal(player, eventName, new[] { parameter0, parameter1, parameter2, parameter3, parameter4 });
+        [PublicAPI] public void SendLCGNetworkEvent(VRCPlayerApi player, string eventName, object parameter0, object parameter1, object parameter2, object parameter3, object parameter4, object parameter5) => InvokeLCGLocal(player, eventName, new[] { parameter0, parameter1, parameter2, parameter3, parameter4, parameter5 });
+        [PublicAPI] public void SendLCGNetworkEvent(VRCPlayerApi player, string eventName, object parameter0, object parameter1, object parameter2, object parameter3, object parameter4, object parameter5, object parameter6) => InvokeLCGLocal(player, eventName, new[] { parameter0, parameter1, parameter2, parameter3, parameter4, parameter5, parameter6 });
+        [PublicAPI] public void SendLCGNetworkEvent(VRCPlayerApi player, string eventName, object parameter0, object parameter1, object parameter2, object parameter3, object parameter4, object parameter5, object parameter6, object parameter7) => InvokeLCGLocal(player, eventName, new[] { parameter0, parameter1, parameter2, parameter3, parameter4, parameter5, parameter6, parameter7 });
+
+        /// <summary>Queues the current value of an [LCGPacket] field even when it equals the last sent value.</summary>
+        [PublicAPI] public void ForceSendPacket(string fieldName) { }
+
+        private void InvokeLCGLocal(VRCPlayerApi player, string eventName, object[] parameters)
+        {
+            if (player == null || !player.isLocal)
+                return;
+            MethodInfo eventMethod = GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .FirstOrDefault(method => method.Name == eventName && method.GetParameters().Length == parameters.Length &&
+                                          method.GetCustomAttribute<LCGPacketAttribute>() != null);
+            eventMethod?.Invoke(this, parameters);
+        }
+
         /// <summary>
         /// Executes target event after delaySeconds. If 0.0 delaySeconds is specified, will execute the following frame
         /// </summary>

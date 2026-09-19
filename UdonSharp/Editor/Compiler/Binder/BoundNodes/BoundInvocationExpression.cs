@@ -399,10 +399,65 @@ namespace UdonSharp.Compiler.Binder
 
             return false;
         }
+
+        private static bool TryCreateLCGPacketInvocation(AbstractPhaseContext context, SyntaxNode node,
+            MethodSymbol symbol, BoundExpression instanceExpression, BoundExpression[] parameterExpressions,
+            out BoundInvocationExpression createdInvocation)
+        {
+            createdInvocation = null;
+            bool targetedPlayer = symbol.Name == "SendLCGNetworkEvent";
+            bool vrcStyle = symbol.Name == "SendCustomNetworkEvent";
+            if ((!targetedPlayer && !vrcStyle) || instanceExpression == null || parameterExpressions.Length < 2 ||
+                !parameterExpressions[1].IsConstant || !(parameterExpressions[1].ConstantValue.Value is string eventName))
+                return false;
+
+            MethodSymbol packetMethod = instanceExpression.ValueType.GetMembers<MethodSymbol>(eventName, context)
+                .FirstOrDefault(method => method.HasAttribute<LCGPacketAttribute>() &&
+                                          method.Parameters.Length == parameterExpressions.Length - 2);
+            if (packetMethod == null)
+            {
+                if (targetedPlayer)
+                    throw new CompilerException($"SendLCGNetworkEvent target '{eventName}' must be a method marked [LCGPacket].", node.GetLocation());
+                return false;
+            }
+
+            createdInvocation = new BoundLCGPacketInvocationExpression(node, symbol, instanceExpression,
+                parameterExpressions, packetMethod, targetedPlayer);
+            return true;
+        }
+
+        private static bool TryCreateLCGForceFieldInvocation(AbstractPhaseContext context, SyntaxNode node,
+            MethodSymbol symbol, BoundExpression instanceExpression, BoundExpression[] parameterExpressions,
+            out BoundInvocationExpression createdInvocation)
+        {
+            createdInvocation = null;
+            if (symbol.Name != "ForceSendPacket" || instanceExpression == null || parameterExpressions.Length != 1 ||
+                !parameterExpressions[0].IsConstant || !(parameterExpressions[0].ConstantValue.Value is string fieldName))
+                return false;
+
+            FieldSymbol packetField = instanceExpression.ValueType.GetMembers<FieldSymbol>(fieldName, context)
+                .FirstOrDefault(field => field.HasAttribute<LCGPacketAttribute>());
+            if (packetField == null)
+                throw new CompilerException($"ForceSendPacket target '{fieldName}' must be a field marked [LCGPacket].", node.GetLocation());
+            if (!instanceExpression.IsThis)
+                throw new CompilerException("ForceSendPacket can only send a field on the current behaviour instance.", node.GetLocation());
+
+            createdInvocation = new BoundLCGForceFieldInvocationExpression(node, symbol, instanceExpression,
+                parameterExpressions, packetField);
+            return true;
+        }
         
         public static BoundInvocationExpression CreateBoundInvocation(AbstractPhaseContext context, SyntaxNode node,
             MethodSymbol symbol, BoundExpression instanceExpression, BoundExpression[] parameterExpressions)
         {
+            if (TryCreateLCGForceFieldInvocation(context, node, symbol, instanceExpression, parameterExpressions,
+                    out var forceFieldInvocation))
+                return forceFieldInvocation;
+
+            if (TryCreateLCGPacketInvocation(context, node, symbol, instanceExpression, parameterExpressions,
+                    out var lcgPacketInvocation))
+                return lcgPacketInvocation;
+
             if (TryCreateShimInvocation(context, node, symbol, instanceExpression, parameterExpressions, out var boundShimInvocation))
                 return boundShimInvocation;
             
@@ -849,6 +904,50 @@ namespace UdonSharp.Compiler.Binder
                     BoundAccessExpression.BindAccess(context.GetConstantValue(ValueType, ConstantValue.Value)));
 
                 return returnVal;
+            }
+        }
+
+        private sealed class BoundLCGPacketInvocationExpression : BoundInvocationExpression
+        {
+            private readonly MethodSymbol _packetMethod;
+            private readonly bool _targetedPlayer;
+
+            public BoundLCGPacketInvocationExpression(SyntaxNode node, MethodSymbol sendMethod,
+                BoundExpression receiverExpression, BoundExpression[] parameterExpressions,
+                MethodSymbol targetPacketMethod, bool isTargetedPlayer)
+                : base(node, sendMethod, receiverExpression, parameterExpressions)
+            {
+                _packetMethod = targetPacketMethod;
+                _targetedPlayer = isTargetedPlayer;
+            }
+
+            public override Value EmitValue(EmitContext context)
+            {
+                BoundExpression[] arguments = new BoundExpression[ParameterExpressions.Length - 2];
+                for (int i = 0; i < arguments.Length; i++)
+                    arguments[i] = ParameterExpressions[i + 2];
+
+                context.EmitLCGPacketMethodInvocation(SourceExpression, _packetMethod, ParameterExpressions[0],
+                    arguments, _targetedPlayer);
+                return null;
+            }
+        }
+
+        private sealed class BoundLCGForceFieldInvocationExpression : BoundInvocationExpression
+        {
+            private readonly FieldSymbol _field;
+
+            public BoundLCGForceFieldInvocationExpression(SyntaxNode node, MethodSymbol method,
+                BoundExpression instanceExpression, BoundExpression[] parameterExpressions, FieldSymbol field)
+                : base(node, method, instanceExpression, parameterExpressions)
+            {
+                _field = field;
+            }
+
+            public override Value EmitValue(EmitContext context)
+            {
+                context.EmitLCGPacketFieldAssignment(_field, context.GetUserValue(_field), true);
+                return null;
             }
         }
     }

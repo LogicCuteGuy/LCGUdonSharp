@@ -418,8 +418,9 @@ namespace UdonSharp.Compiler
                     throw new CompilerException($"Interface method with built-in event name '{methodSymbol.Name}' is not supported.",
                         methodSymbol.RoslynSymbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()?.GetLocation());
 
-                if (methodSymbol.SymbolAttributes != null && methodSymbol.HasAttribute<NetworkCallableAttribute>())
-                    throw new CompilerException($"Interface method implementation '{methodSymbol.Name}' cannot be marked [NetworkCallable].",
+                if (methodSymbol.SymbolAttributes != null &&
+                    (methodSymbol.HasAttribute<NetworkCallableAttribute>() || methodSymbol.HasAttribute<LCGPacketAttribute>()))
+                    throw new CompilerException($"Interface method implementation '{methodSymbol.Name}' cannot be marked [NetworkCallable] or [LCGPacket].",
                         methodSymbol.RoslynSymbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()?.GetLocation());
 
                 MethodExportLayout interfaceLayout = BuildInterfaceMethodLayout(methodSymbol, interfaceMethod);
@@ -445,13 +446,15 @@ namespace UdonSharp.Compiler
                 for (int i = 0; i < paramNames.Length && i < paramArgs.Length; ++i)
                     paramNames[i] = paramArgs[i].Item1;
 
-                if (methodSymbol.SymbolAttributes != null && methodSymbol.HasAttribute<NetworkCallableAttribute>())
+                if (methodSymbol.SymbolAttributes != null &&
+                    (methodSymbol.HasAttribute<NetworkCallableAttribute>() || methodSymbol.HasAttribute<LCGPacketAttribute>()))
                 {
                     AddDiagnostic(DiagnosticSeverity.Error, methodSymbol.RoslynSymbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()?.GetLocation(),
-                        $"Built-in Udon event '{methodName}' cannot be marked [NetworkCallable].");
+                        $"Built-in Udon event '{methodName}' cannot be marked [NetworkCallable] or [LCGPacket].");
                 }
             }
-            else if (methodSymbol.SymbolAttributes != null && methodSymbol.HasAttribute<NetworkCallableAttribute>())
+            else if (methodSymbol.SymbolAttributes != null &&
+                     (methodSymbol.HasAttribute<NetworkCallableAttribute>() || methodSymbol.HasAttribute<LCGPacketAttribute>()))
             {
                 // Do not mangle network callable methods, we guarantee they are unique later on and other scripts may call them by name
                 // Their parameters are fair game though, as long as we encode the mangled version into the metadata too
@@ -467,6 +470,21 @@ namespace UdonSharp.Compiler
 
                 // Validate function itself
                 ValidateNetworkCallableMethod(methodSymbol, methodName);
+
+                LCGPacketAttribute packetAttribute = methodSymbol.GetAttribute<LCGPacketAttribute>();
+                if (packetAttribute != null && !string.IsNullOrEmpty(packetAttribute.Callback))
+                {
+                    AddDiagnostic(DiagnosticSeverity.Error,
+                        methodSymbol.RoslynSymbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()?.GetLocation(),
+                        $"LCG packet method '{methodName}' cannot declare Callback; Callback is only valid on fields.");
+                }
+
+                if (packetAttribute != null && methodSymbol.HasAttribute<NetworkCallableAttribute>())
+                {
+                    AddDiagnostic(DiagnosticSeverity.Error,
+                        methodSymbol.RoslynSymbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()?.GetLocation(),
+                        $"LCG packet method '{methodName}' cannot also be marked [NetworkCallable].");
+                }
 
                 networkCallableDedup[methodName] = true; // yes, we are network callable
             }

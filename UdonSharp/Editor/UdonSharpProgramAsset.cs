@@ -87,6 +87,16 @@ namespace UdonSharp
 
         private NetworkCallingEntrypointMetadata[] networkCallingMetadata;
 
+        internal NetworkCallingEntrypointMetadata[] NetworkCallingMetadata => networkCallingMetadata;
+
+        [NonSerialized, OdinSerialize] private string[] lcgCallbackSourceNames = Array.Empty<string>();
+        [NonSerialized, OdinSerialize] private string[] lcgCallbackEventNames = Array.Empty<string>();
+        [NonSerialized, OdinSerialize] private string[] lcgCallbackParameterNames = Array.Empty<string>();
+
+        internal string[] LCGCallbackSourceNames => lcgCallbackSourceNames;
+        internal string[] LCGCallbackEventNames => lcgCallbackEventNames;
+        internal string[] LCGCallbackParameterNames => lcgCallbackParameterNames;
+
         [NonSerialized, OdinSerialize]
         public Dictionary<string, FieldDefinition> fieldDefinitions;
         
@@ -562,6 +572,13 @@ namespace UdonSharp
         public void SetNetworkCallingMetadata(NetworkCallingEntrypointMetadata[] metadata)
         {
             networkCallingMetadata = metadata;
+        }
+
+        internal void SetLCGCallbackMetadata(string[] sourceNames, string[] eventNames, string[] parameterNames)
+        {
+            lcgCallbackSourceNames = sourceNames ?? Array.Empty<string>();
+            lcgCallbackEventNames = eventNames ?? Array.Empty<string>();
+            lcgCallbackParameterNames = parameterNames ?? Array.Empty<string>();
         }
         
         public IUdonProgram GetRealProgram()

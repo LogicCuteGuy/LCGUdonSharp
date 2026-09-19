@@ -148,10 +148,16 @@ namespace UdonSharp.Compiler.Binder
             public override Value EmitSet(EmitContext context, BoundExpression valueExpression)
             {
                 if (SourceExpression == null || SourceExpression.IsThis)
-                    return context.EmitValueAssignment(context.GetUserValue(Field), valueExpression);
+                {
+                    Value assignedValue = context.EmitValueAssignment(context.GetUserValue(Field), valueExpression);
+                    context.EmitLCGPacketFieldAssignment(Field, assignedValue);
+                    return assignedValue;
+                }
 
                 if (Field.HasAttribute<FieldChangeCallbackAttribute>())
                     throw new CompilerException("Cannot set field on U# behaviour by reference when that field has a FieldChangeCallback attribute.");
+                if (Field.HasAttribute<LCGPacketAttribute>())
+                    throw new CompilerException("Cannot assign an [LCGPacket] field through another U# behaviour reference. Add a method on the target behaviour that performs the assignment locally.");
                 
                 TypeSymbol stringType = context.GetTypeSymbol(SpecialType.System_String);
                 MethodSymbol setProgramVariableMethod = context.GetTypeSymbol(typeof(UdonSharpBehaviour))

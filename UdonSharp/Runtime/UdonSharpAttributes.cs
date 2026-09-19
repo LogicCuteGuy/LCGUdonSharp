@@ -4,6 +4,66 @@ using System;
 
 namespace UdonSharp
 {
+    /// <summary>
+    /// Controls which remote callers may apply an LCG packet.
+    /// </summary>
+    [PublicAPI]
+    public enum LCGPacketAuthority
+    {
+        Any,
+        ObjectOwner,
+        Master,
+    }
+
+    /// <summary>
+    /// Marks a field or method for event-driven LCG packet networking.
+    /// Field assignments are state packets; methods are discrete packet events.
+    /// </summary>
+    [PublicAPI]
+    [AttributeUsage(AttributeTargets.Field | AttributeTargets.Method, AllowMultiple = false, Inherited = false)]
+    public sealed class LCGPacketAttribute : Attribute
+    {
+        public LCGPacketAuthority Authority = LCGPacketAuthority.Any;
+
+        /// <summary>
+        /// Optional field receive callback. Ignored for packet methods.
+        /// </summary>
+        public string Callback;
+    }
+
+    [PublicAPI]
+    public enum LCGZoneExitMode
+    {
+        Freeze,
+        RestoreDefaults,
+        DisableChildren,
+    }
+
+    /// <summary>Wire type identifiers used by compiler-generated packet frames.</summary>
+    public enum LCGPacketType : byte
+    {
+        Boolean = 1,
+        SByte = 2,
+        Byte = 3,
+        Int16 = 4,
+        UInt16 = 5,
+        Int32 = 6,
+        UInt32 = 7,
+        Int64 = 8,
+        UInt64 = 9,
+        Single = 10,
+        Double = 11,
+        Char = 12,
+        String = 13,
+        Vector2 = 14,
+        Vector3 = 15,
+        Vector4 = 16,
+        Quaternion = 17,
+        Color = 18,
+        Color32 = 19,
+        ArrayFlag = 128,
+    }
+
     // At the moment Udon syncing is in a very early state.
     // This is very liable to be changed with changes to Udon syncing in the future.
     [PublicAPI]
@@ -120,4 +180,3 @@ namespace UdonSharp
     public class CompileInitAttribute : Attribute
     {}
 }
-

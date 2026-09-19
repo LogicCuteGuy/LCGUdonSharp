@@ -24,3 +24,20 @@ Setup deliberately stops on an SDK version other than `3.10.5` instead of modify
 - Parameters, return values, simple properties, multiple implementations, and interface arrays.
 
 Not supported: generic interfaces or methods, interface inheritance, default or static interface members, events, indexers, explicit implementations, `[NetworkCallable]` interface implementations, and member names that collide with built-in Udon events.
+
+## LCG manual packet networking (experimental)
+
+`[LCGPacket]` fields are sent manually when assigned. Repeated assignments in one frame are coalesced, unchanged encoded values are skipped, and `ForceSendPacket(nameof(field))` bypasses that suppression. A callback, when configured, receives the verified `VRCPlayerApi` sender.
+
+```csharp
+[LCGPacket(Authority = LCGPacketAuthority.ObjectOwner, Callback = nameof(OnHealthChanged))]
+private int health;
+
+public void OnHealthChanged(VRCPlayerApi sender) { }
+```
+
+Public `void` methods with up to eight supported arguments may also use `[LCGPacket]`. Direct calls remain local. `SendCustomNetworkEvent(...)` is lowered to mailbox delivery only when its target method has `[LCGPacket]`; `SendLCGNetworkEvent(player, ...)` provides targeted delivery.
+
+Add `LCGNetworkZone` to a trigger collider to restrict descendant packet recipients and ownership to players in the trigger. Build/Test scene copies receive one `LCGRuntime`, one PlayerObject mailbox template, ownership guards, and manual `VRCObjectSync` replacements; authoring scenes are not modified. Transform changes are local until `LCGNetwork.RequestObjectSync(gameObject)` is called.
+
+Networking is event-driven: there is no Continuous sync or transform polling. A build fails closed for Continuous behaviours, networked Udon Graph behaviours, unrelated overlapping zones, and currently for `[UdonSynced]` fields under a zone. The last case prevents native VRC sync from escaping the zone until generated per-zone program variants are implemented. Native manual `[UdonSynced]` outside zones is unchanged.
