@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.Serialization;
 using NUnit.Framework;
 using UnityEngine;
 
@@ -88,6 +89,23 @@ namespace UdonSharp.Tests
                 Is.Not.Null);
             Assert.That(typeof(LCGRuntime).GetMethod("__lcgRequestObjectSync",
                 BindingFlags.Public | BindingFlags.Instance), Is.Not.Null);
+        }
+
+        [Test]
+        public void CompilerSymbol_HasAttributeHandlesAttributesBeforeBinding()
+        {
+            Assembly compilerAssembly = typeof(Compiler.UdonSharpCompilerV1).Assembly;
+            Type symbolType = compilerAssembly.GetType("UdonSharp.Compiler.Symbols.Symbol", true);
+            Type methodSymbolType = compilerAssembly.GetType(
+                "UdonSharp.Compiler.Symbols.ExternSynthesizedMethodSymbol", true);
+            object unboundMethod = FormatterServices.GetUninitializedObject(methodSymbolType);
+            MethodInfo hasAttribute = symbolType
+                .GetMethod("HasAttribute", BindingFlags.Instance | BindingFlags.NonPublic)
+                .MakeGenericMethod(typeof(LCGPacketAttribute));
+
+            object result = null;
+            Assert.DoesNotThrow(() => result = hasAttribute.Invoke(unboundMethod, Array.Empty<object>()));
+            Assert.That(result, Is.False);
         }
 
         [Test]

@@ -3,6 +3,7 @@ using System;
 using Microsoft.CodeAnalysis;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
 using System.Reflection;
 using UdonSharp.Compiler.Binder;
 
@@ -60,17 +61,25 @@ namespace UdonSharp.Compiler.Symbols
 
         internal bool HasAttribute<T>() where T : Attribute
         {
-            foreach (Attribute symbolAttribute in SymbolAttributes)
+            if (!SymbolAttributes.IsDefault)
             {
-                if (symbolAttribute is T)
-                    return true;
+                foreach (Attribute symbolAttribute in SymbolAttributes)
+                {
+                    if (symbolAttribute is T)
+                        return true;
+                }
             }
 
-            return false;
+            string attributeTypeName = typeof(T).FullName?.Replace('+', '.');
+            return RoslynSymbol?.GetAttributes().Any(attribute =>
+                attribute.AttributeClass?.ToDisplayString() == attributeTypeName) ?? false;
         }
 
         internal T GetAttribute<T>() where T : Attribute
         {
+            if (SymbolAttributes.IsDefaultOrEmpty)
+                return null;
+
             foreach (Attribute symbolAttribute in SymbolAttributes)
             {
                 if (symbolAttribute is T symbolT)
