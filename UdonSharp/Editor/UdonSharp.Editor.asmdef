@@ -5,6 +5,7 @@
         "VRC.Udon.Editor",
         "VRC.Udon.Serialization.OdinSerializer",
         "UdonSharp.Runtime",
+        "LogicCuteGuy.LCGUdonSharp.Runtime",
         "UdonSharp.Lib"
     ],
     "includePlatforms": [

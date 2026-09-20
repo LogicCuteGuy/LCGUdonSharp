@@ -4,6 +4,7 @@
   "references": [
     "LogicCuteGuy.LCGUdonSharp.Installer.Editor",
     "UdonSharp.Runtime",
+    "LogicCuteGuy.LCGUdonSharp.Runtime",
     "UdonSharp.Editor"
   ],
   "includePlatforms": [
