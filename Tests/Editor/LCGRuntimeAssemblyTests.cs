@@ -17,7 +17,7 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer.Tests
         private static readonly string[] RuntimeBehaviourPaths =
         {
             "Packages/com.logiccuteguy.lcgudonsharp/UdonSharp/Runtime/LCGBehaviours/LCGManualObjectSync.cs",
-            "Packages/com.logiccuteguy.lcgudonsharp/UdonSharp/Runtime/LCGBehaviours/LCGNetworkRuntime.cs",
+            "Packages/com.logiccuteguy.lcgudonsharp/UdonSharp/Runtime/LCGBehaviours/LCGRuntime.cs",
             "Packages/com.logiccuteguy.lcgudonsharp/UdonSharp/Runtime/LCGBehaviours/LCGNetworkZone.cs",
         };
 
