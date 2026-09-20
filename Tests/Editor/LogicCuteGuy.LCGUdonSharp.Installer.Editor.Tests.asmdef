@@ -3,7 +3,8 @@
   "rootNamespace": "LogicCuteGuy.LCGUdonSharp.Installer.Tests",
   "references": [
     "LogicCuteGuy.LCGUdonSharp.Installer.Editor",
-    "UdonSharp.Runtime"
+    "UdonSharp.Runtime",
+    "UdonSharp.Editor"
   ],
   "includePlatforms": [
     "Editor"

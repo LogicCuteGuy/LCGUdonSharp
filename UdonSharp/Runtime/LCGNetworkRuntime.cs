@@ -65,6 +65,7 @@ namespace UdonSharp
         [HideInInspector] public object __lcgSenderArg5;
         [HideInInspector] public object __lcgSenderArg6;
         [HideInInspector] public object __lcgSenderArg7;
+        [HideInInspector] public GameObject __lcgObjectSyncTarget;
 
         private int sequence;
         private int pendingFieldCount;
@@ -174,6 +175,18 @@ namespace UdonSharp
                 fieldFlushScheduled = true;
                 SendCustomEventDelayedFrames(nameof(__lcgFlushFields), 1);
             }
+        }
+
+        public void __lcgRequestObjectSync()
+        {
+            GameObject target = __lcgObjectSyncTarget;
+            __lcgObjectSyncTarget = null;
+            if (target == null)
+                return;
+
+            LCGManualObjectSync sync = target.GetComponent<LCGManualObjectSync>();
+            if (sync != null)
+                sync.RequestObjectSync();
         }
 
         public void __lcgFlushFields()

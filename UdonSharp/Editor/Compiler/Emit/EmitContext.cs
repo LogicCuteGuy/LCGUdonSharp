@@ -378,6 +378,40 @@ namespace UdonSharp.Compiler.Emit
                 }));
         }
 
+        internal void EmitLCGObjectSyncRequest(BoundExpression targetExpression)
+        {
+            EnsureLCGPacketAbi();
+            TypeSymbol stringType = GetTypeSymbol(SpecialType.System_String);
+            TypeSymbol objectType = GetTypeSymbol(SpecialType.System_Object);
+            TypeSymbol udonBehaviourType = GetTypeSymbol(typeof(UdonBehaviour));
+            MethodSymbol setProgramVariable = udonBehaviourType.GetMembers<MethodSymbol>("SetProgramVariable", this)
+                .First(method => method.Parameters.Length == 2 && method.Parameters[0].Type == stringType &&
+                                 method.Parameters[1].Type == objectType);
+            MethodSymbol sendCustomEvent = udonBehaviourType.GetMembers<MethodSymbol>("SendCustomEvent", this)
+                .First(method => method.Parameters.Length == 1 && method.Parameters[0].Type == stringType);
+            BoundAccessExpression runtimeAccess = BoundAccessExpression.BindAccess(_lcgRuntimeValue);
+
+            using (Value.CowValue targetValue = EmitValueWithDeferredRelease(targetExpression).GetCowValue(this))
+            {
+                MethodSymbol isValid = GetTypeSymbol(typeof(Utilities)).GetMembers<MethodSymbol>("IsValid", this)
+                    .First(method => method.Parameters.Length == 1);
+                BoundInvocationExpression validityCheck = BoundInvocationExpression.CreateBoundInvocation(this,
+                    CurrentNode, isValid, null, new BoundExpression[] { runtimeAccess });
+                Value runtimeIsValid = EmitValue(validityCheck);
+                JumpLabel exitLabel = Module.CreateLabel();
+                Module.AddJumpIfFalse(exitLabel, runtimeIsValid);
+
+                EmitRuntimeRegister(setProgramVariable, runtimeAccess, "__lcgObjectSyncTarget",
+                    BoundAccessExpression.BindAccess(targetValue.Value));
+                Emit(BoundInvocationExpression.CreateBoundInvocation(this, CurrentNode, sendCustomEvent,
+                    runtimeAccess, new BoundExpression[]
+                    {
+                        BoundAccessExpression.BindAccess(GetConstantValue(stringType, "__lcgRequestObjectSync"))
+                    }));
+                Module.LabelJump(exitLabel);
+            }
+        }
+
         private void EmitRuntimeRegister(MethodSymbol setter, BoundAccessExpression runtimeAccess, string name,
             BoundExpression value)
         {

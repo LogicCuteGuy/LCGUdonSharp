@@ -82,6 +82,15 @@ namespace UdonSharp.Tests
         }
 
         [Test]
+        public void ManualObjectSync_RuntimeAbiExposesCompilerDispatchRegisters()
+        {
+            Assert.That(typeof(LCGRuntime).GetField("__lcgObjectSyncTarget", BindingFlags.Public | BindingFlags.Instance),
+                Is.Not.Null);
+            Assert.That(typeof(LCGRuntime).GetMethod("__lcgRequestObjectSync",
+                BindingFlags.Public | BindingFlags.Instance), Is.Not.Null);
+        }
+
+        [Test]
         public void Behaviour_ExposesTargetedMethodAndForcedFieldApis()
         {
             MethodInfo[] targeted = typeof(UdonSharpBehaviour).GetMethods(BindingFlags.Public | BindingFlags.Instance)

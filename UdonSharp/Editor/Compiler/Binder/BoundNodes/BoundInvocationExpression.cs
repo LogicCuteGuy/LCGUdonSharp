@@ -450,6 +450,10 @@ namespace UdonSharp.Compiler.Binder
         public static BoundInvocationExpression CreateBoundInvocation(AbstractPhaseContext context, SyntaxNode node,
             MethodSymbol symbol, BoundExpression instanceExpression, BoundExpression[] parameterExpressions)
         {
+            if (TryCreateLCGObjectSyncInvocation(context, node, symbol, parameterExpressions,
+                    out var objectSyncInvocation))
+                return objectSyncInvocation;
+
             if (TryCreateLCGForceFieldInvocation(context, node, symbol, instanceExpression, parameterExpressions,
                     out var forceFieldInvocation))
                 return forceFieldInvocation;
@@ -518,6 +522,19 @@ namespace UdonSharp.Compiler.Binder
             }
 
             throw new System.NotImplementedException();
+        }
+
+        private static bool TryCreateLCGObjectSyncInvocation(AbstractPhaseContext context, SyntaxNode node,
+            MethodSymbol symbol, BoundExpression[] parameterExpressions,
+            out BoundInvocationExpression createdInvocation)
+        {
+            createdInvocation = null;
+            if (symbol.Name != nameof(LCGNetwork.RequestObjectSync) || parameterExpressions.Length != 1 ||
+                symbol.ContainingType != context.GetTypeSymbol(typeof(LCGNetwork)))
+                return false;
+
+            createdInvocation = new BoundLCGObjectSyncInvocationExpression(node, symbol, parameterExpressions);
+            return true;
         }
 
         protected override void ReleaseCowValuesImpl(EmitContext context)
@@ -929,6 +946,21 @@ namespace UdonSharp.Compiler.Binder
 
                 context.EmitLCGPacketMethodInvocation(SourceExpression, _packetMethod, ParameterExpressions[0],
                     arguments, _targetedPlayer);
+                return null;
+            }
+        }
+
+        private sealed class BoundLCGObjectSyncInvocationExpression : BoundInvocationExpression
+        {
+            public BoundLCGObjectSyncInvocationExpression(SyntaxNode node, MethodSymbol method,
+                BoundExpression[] parameterExpressions)
+                : base(node, method, null, parameterExpressions)
+            {
+            }
+
+            public override Value EmitValue(EmitContext context)
+            {
+                context.EmitLCGObjectSyncRequest(ParameterExpressions[0]);
                 return null;
             }
         }

@@ -1,8 +1,10 @@
 using System.IO;
 using NUnit.Framework;
+using UdonSharp.Compiler;
 using UnityEditor;
 using UnityEditor.Compilation;
 using UnityEngine;
+using UnityEngine.TestTools;
 
 namespace LogicCuteGuy.LCGUdonSharp.Installer.Tests
 {
@@ -45,6 +47,13 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer.Tests
                 Assert.That(Path.GetFileNameWithoutExtension(resolvedAssembly), Is.EqualTo(ExpectedAssemblyName),
                     scriptPath + " does not resolve to the registered example assembly.");
             }
+        }
+
+        [Test]
+        public void ManualObjectSyncExample_CompilesThroughUdonSharp()
+        {
+            UdonSharpCompilerV1.CompileSync(new UdonSharpCompileOptions { IsEditorBuild = true });
+            LogAssert.NoUnexpectedReceived();
         }
     }
 }
