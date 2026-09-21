@@ -586,7 +586,7 @@ public class Owners
                     typeof(VRC.SDKBase.VRCUrl).Assembly.Location,
                     typeof(VRC.SDK3.Image.VRCImageDownloader).Assembly.Location,
                     typeof(VRC.Udon.Common.SerializationResult).Assembly.Location,
-                    typeof(VRC.Udon.Serialization.OdinSerializer.ISupportsPrefabSerialization).Assembly.Location,
+                    Assembly.Load("VRC.Udon.Serialization.OdinSerializer").Location,
                     Path.GetFullPath("Packages/com.vrchat.worlds/Runtime/VRCSDK/Plugins/VRCEconomy.dll"),
                 }
                 .Distinct()
