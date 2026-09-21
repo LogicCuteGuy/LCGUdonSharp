@@ -551,9 +551,7 @@ namespace UdonSharp.Compiler.Binder
         {
             if (syntax is ElementAccessExpressionSyntax elementAccess)
             {
-                ISymbol arraySymbol = SymbolLookupModel.GetSymbolInfo(elementAccess.Expression).Symbol;
-                string arrayKey = arraySymbol?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) ??
-                                  elementAccess.Expression.WithoutTrivia().ToString();
+                string arrayKey = GetByRefLocationKey(elementAccess.Expression);
                 var constantIndices = elementAccess.ArgumentList.Arguments
                     .Select(argument => SymbolLookupModel.GetConstantValue(argument.Expression))
                     .ToArray();
@@ -563,9 +561,30 @@ namespace UdonSharp.Compiler.Binder
                 return arrayKey + "[*]";
             }
 
+            if (syntax is MemberAccessExpressionSyntax memberAccess)
+            {
+                ISymbol member = SymbolLookupModel.GetSymbolInfo(memberAccess).Symbol;
+                ITypeSymbol receiverType = SymbolLookupModel.GetTypeInfo(memberAccess.Expression).Type;
+                if (member != null && receiverType?.IsValueType == true)
+                    return GetByRefLocationKey(memberAccess.Expression) + "." +
+                           GetSymbolLocationKey(member);
+                if (member != null)
+                    return GetSymbolLocationKey(member);
+            }
+
             ISymbol symbol = SymbolLookupModel.GetSymbolInfo(syntax).Symbol;
-            return symbol?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) ??
-                   syntax.WithoutTrivia().ToString();
+            return symbol != null
+                ? GetSymbolLocationKey(symbol)
+                : syntax.WithoutTrivia().ToString();
+        }
+
+        private static string GetSymbolLocationKey(ISymbol symbol)
+        {
+            // ParameterSymbol.ToDisplayString() may contain only its type, causing two distinct
+            // parameters of the same type to be mistaken for one aliased storage location.
+            string owner = symbol.ContainingSymbol?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) ??
+                           string.Empty;
+            return symbol.Kind + "|" + owner + "|" + symbol.Name;
         }
 
         public override BoundNode VisitLocalDeclarationStatement(LocalDeclarationStatementSyntax node)

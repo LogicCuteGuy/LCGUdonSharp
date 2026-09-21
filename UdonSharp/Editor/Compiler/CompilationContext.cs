@@ -785,6 +785,790 @@ namespace UdonSharp.Compiler
 
 namespace UdonSharp.Compiler.Lowering
 {
+    internal sealed class ExtendedSyntaxLoweringDiagnostic
+    {
+        internal SyntaxNode Node { get; }
+        internal string Message { get; }
+
+        internal ExtendedSyntaxLoweringDiagnostic(SyntaxNode node, string message)
+        {
+            Node = node;
+            Message = message;
+        }
+    }
+
+    internal sealed class ExtendedSyntaxLoweringResult
+    {
+        internal SyntaxTree Tree { get; }
+        internal ImmutableArray<ExtendedSyntaxLoweringDiagnostic> Diagnostics { get; }
+        internal bool Changed { get; }
+
+        internal ExtendedSyntaxLoweringResult(SyntaxTree tree,
+            ImmutableArray<ExtendedSyntaxLoweringDiagnostic> diagnostics, bool changed)
+        {
+            Tree = tree;
+            Diagnostics = diagnostics;
+            Changed = changed;
+        }
+    }
+
+    /// <summary>
+    /// Erases extended syntax which has a deterministic Udon representation. Dynamic locals are
+    /// narrowed from their initializer type, and immediate array Where/Select/ToArray pipelines are
+    /// expanded into loops. Lambda captures remain ordinary reads of the surrounding variables in
+    /// the generated loop, so no delegate or closure object reaches the U# binder.
+    /// </summary>
+    internal static class ExtendedSyntaxLowerer
+    {
+        internal static ExtendedSyntaxLoweringResult Rewrite(SyntaxTree tree,
+            Func<ClassDeclarationSyntax, bool> shouldRewriteClass, SemanticModel semanticModel)
+        {
+            var rewriter = new Rewriter(shouldRewriteClass, semanticModel);
+            SyntaxNode root = rewriter.Visit(tree.GetRoot());
+            SyntaxTree rewrittenTree = rewriter.Changed
+                ? tree.WithRootAndOptions(root, tree.Options)
+                : tree;
+            return new ExtendedSyntaxLoweringResult(rewrittenTree,
+                rewriter.Diagnostics.ToImmutableArray(), rewriter.Changed);
+        }
+
+        private sealed class Rewriter : CSharpSyntaxRewriter
+        {
+            private readonly Func<ClassDeclarationSyntax, bool> _shouldRewriteClass;
+            private readonly SemanticModel _semanticModel;
+            private readonly HashSet<ISymbol> _narrowedDynamicLocals =
+                new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+            private bool _inTargetClass;
+            private int _temporaryId;
+
+            internal bool Changed { get; private set; }
+            internal List<ExtendedSyntaxLoweringDiagnostic> Diagnostics { get; } =
+                new List<ExtendedSyntaxLoweringDiagnostic>();
+
+            internal Rewriter(Func<ClassDeclarationSyntax, bool> shouldRewriteClass,
+                SemanticModel semanticModel)
+            {
+                _shouldRewriteClass = shouldRewriteClass;
+                _semanticModel = semanticModel;
+            }
+
+            public override SyntaxNode VisitClassDeclaration(ClassDeclarationSyntax node)
+            {
+                bool previous = _inTargetClass;
+                _inTargetClass = _shouldRewriteClass == null || _shouldRewriteClass(node);
+                ClassDeclarationSyntax visited = (ClassDeclarationSyntax)base.VisitClassDeclaration(node);
+                _inTargetClass = previous;
+                return visited;
+            }
+
+            public override SyntaxNode VisitSimpleLambdaExpression(SimpleLambdaExpressionSyntax node)
+            {
+                if (_inTargetClass)
+                    AddEscapingDelegateDiagnostic(node);
+                return base.VisitSimpleLambdaExpression(node);
+            }
+
+            public override SyntaxNode VisitParenthesizedLambdaExpression(ParenthesizedLambdaExpressionSyntax node)
+            {
+                if (_inTargetClass)
+                    AddEscapingDelegateDiagnostic(node);
+                return base.VisitParenthesizedLambdaExpression(node);
+            }
+
+            public override SyntaxNode VisitIdentifierName(IdentifierNameSyntax node)
+            {
+                if (node.SyntaxTree != _semanticModel.SyntaxTree)
+                    return base.VisitIdentifierName(node);
+                ISymbol symbol = _semanticModel.GetSymbolInfo(node).Symbol;
+                if (_inTargetClass && _semanticModel.GetTypeInfo(node).Type?.TypeKind == TypeKind.Dynamic &&
+                    !_narrowedDynamicLocals.Contains(symbol))
+                    Diagnostics.Add(new ExtendedSyntaxLoweringDiagnostic(node,
+                        "This dynamic value requires runtime dynamic dispatch; use a value whose single concrete type can be proven at build time."));
+                return base.VisitIdentifierName(node);
+            }
+
+            public override SyntaxNode VisitGenericName(GenericNameSyntax node)
+            {
+                if (_inTargetClass && node.SyntaxTree == _semanticModel.SyntaxTree &&
+                    _semanticModel.GetTypeInfo(node).Type is INamedTypeSymbol type &&
+                    IsSpanType(type))
+                    Diagnostics.Add(new ExtendedSyntaxLoweringDiagnostic(node,
+                        "Only method-local array-backed Span<T>/ReadOnlySpan<T> values are supported; span fields, parameters, returns, captures, and unmanaged spans are not."));
+                return base.VisitGenericName(node);
+            }
+
+            private void AddEscapingDelegateDiagnostic(LambdaExpressionSyntax lambda)
+            {
+                Diagnostics.Add(new ExtendedSyntaxLoweringDiagnostic(lambda,
+                    "Escaping delegates are not supported in Udon; use an immediate supported array LINQ pipeline ending in ToArray()."));
+            }
+
+            public override SyntaxNode VisitLocalDeclarationStatement(LocalDeclarationStatementSyntax node)
+            {
+                if (!_inTargetClass || !node.Declaration.Type.IsKind(SyntaxKind.IdentifierName) ||
+                    node.Declaration.Type.ToString() != "dynamic")
+                    return base.VisitLocalDeclarationStatement(node);
+
+                if (node.Declaration.Variables.Count != 1 ||
+                    node.Declaration.Variables[0].Initializer == null)
+                    return node;
+
+                ExpressionSyntax initializer = node.Declaration.Variables[0].Initializer.Value;
+                string variableName = node.Declaration.Variables[0].Identifier.ValueText;
+                if (node.Parent is BlockSyntax containingBlock && containingBlock.DescendantNodes()
+                        .Any(candidate =>
+                            candidate is AssignmentExpressionSyntax assignment &&
+                            assignment.Left is IdentifierNameSyntax assignedIdentifier &&
+                            assignedIdentifier.Identifier.ValueText == variableName ||
+                            candidate is PrefixUnaryExpressionSyntax prefix &&
+                            prefix.Operand is IdentifierNameSyntax prefixIdentifier &&
+                            prefixIdentifier.Identifier.ValueText == variableName ||
+                            candidate is PostfixUnaryExpressionSyntax postfix &&
+                            postfix.Operand is IdentifierNameSyntax postfixIdentifier &&
+                            postfixIdentifier.Identifier.ValueText == variableName))
+                    return node;
+                ITypeSymbol initializerType = _semanticModel.GetTypeInfo(initializer).Type ??
+                                              _semanticModel.GetTypeInfo(initializer).ConvertedType;
+                if (!IsConcreteDynamicType(initializerType) ||
+                    !HasOnlySafeDynamicUses(node, variableName))
+                    return node;
+
+                _narrowedDynamicLocals.Add(
+                    _semanticModel.GetDeclaredSymbol(node.Declaration.Variables[0]));
+                Changed = true;
+                return node.WithDeclaration(node.Declaration.WithType(
+                    SyntaxFactory.ParseTypeName(GetTypeSource(initializerType))
+                        .WithTriviaFrom(node.Declaration.Type)));
+            }
+
+            public override SyntaxNode VisitBlock(BlockSyntax node)
+            {
+                if (!_inTargetClass)
+                    return base.VisitBlock(node);
+
+                var statements = new List<StatementSyntax>();
+                var spans = new Dictionary<string, SpanInfo>(StringComparer.Ordinal);
+                foreach (StatementSyntax statement in node.Statements)
+                {
+                    if (statement is LocalDeclarationStatementSyntax local &&
+                        TryLowerArrayPipeline(local, out IEnumerable<StatementSyntax> lowered))
+                    {
+                        statements.AddRange(lowered);
+                        Changed = true;
+                    }
+                    else if (statement is LocalDeclarationStatementSyntax spanLocal &&
+                             TryLowerSpanDeclaration(spanLocal, spans,
+                                 out IEnumerable<StatementSyntax> loweredSpan))
+                    {
+                        statements.AddRange(loweredSpan);
+                        Changed = true;
+                    }
+                    else if (statement is LocalDeclarationStatementSyntax spanCopy &&
+                             TryLowerSpanToArray(spanCopy, spans,
+                                 out IEnumerable<StatementSyntax> loweredCopy))
+                    {
+                        statements.AddRange(loweredCopy);
+                        Changed = true;
+                    }
+                    else if (statement is ExpressionStatementSyntax spanOperation &&
+                             TryLowerSpanOperation(spanOperation, spans,
+                                 out StatementSyntax loweredOperation))
+                    {
+                        statements.Add(loweredOperation);
+                        Changed = true;
+                    }
+                    else
+                    {
+                        StatementSyntax spanRewritten = spans.Count == 0
+                            ? statement
+                            : (StatementSyntax)new SpanUseRewriter(spans, _semanticModel).Visit(statement);
+                        statements.Add((StatementSyntax)Visit(spanRewritten));
+                    }
+                }
+
+                return node.WithStatements(SyntaxFactory.List(statements));
+            }
+
+            private bool TryLowerSpanDeclaration(LocalDeclarationStatementSyntax declaration,
+                IDictionary<string, SpanInfo> spans, out IEnumerable<StatementSyntax> loweredStatements)
+            {
+                loweredStatements = null;
+                if (declaration.SyntaxTree != _semanticModel.SyntaxTree)
+                    return false;
+                if (declaration.Declaration.Variables.Count != 1)
+                    return false;
+
+                ITypeSymbol declaredType = _semanticModel.GetTypeInfo(declaration.Declaration.Type).Type;
+                if (!(declaredType is INamedTypeSymbol spanType) || !IsSpanType(spanType))
+                    return false;
+
+                VariableDeclaratorSyntax variable = declaration.Declaration.Variables[0];
+                if (variable.Initializer == null ||
+                    !TryGetSpanBacking(variable.Initializer.Value, spans,
+                        out string arrayExpression, out string offsetExpression, out string lengthExpression,
+                        out string boundsOffsetExpression, out string boundsLengthExpression,
+                        out List<StatementSyntax> argumentPrelude))
+                    return false;
+
+                int id = _temporaryId++;
+                string prefix = $"__uspan_{id}_{variable.Identifier.ValueText}_";
+                var info = new SpanInfo(prefix + "array", prefix + "offset", prefix + "length",
+                    prefix + "backingLength",
+                    GetTypeSource(spanType.TypeArguments[0]),
+                    spanType.OriginalDefinition.ToDisplayString() == "System.ReadOnlySpan<T>",
+                    _semanticModel.GetDeclaredSymbol(variable) as ILocalSymbol);
+                spans[variable.Identifier.ValueText] = info;
+                if (lengthExpression == null)
+                    lengthExpression = $"{info.BackingLengthName} - {info.OffsetName}";
+                else if (lengthExpression.StartsWith("__SPAN_REMAINDER__|", StringComparison.Ordinal))
+                {
+                    string[] parts = lengthExpression.Split('|');
+                    lengthExpression = $"{parts[1]} - ({info.OffsetName} - {parts[2]})";
+                }
+                if (boundsLengthExpression == "__BACKING_ARRAY_LENGTH__")
+                    boundsLengthExpression = info.BackingLengthName;
+                var generated = new List<StatementSyntax>
+                {
+                    SyntaxFactory.ParseStatement($"{info.ElementType}[] {info.ArrayName} = {arrayExpression};"),
+                    SyntaxFactory.ParseStatement(
+                        $"int {info.BackingLengthName} = {info.ArrayName} == null ? 0 : {info.ArrayName}.Length;"),
+                };
+                generated.AddRange(argumentPrelude);
+                generated.Add(SyntaxFactory.ParseStatement($"int {info.OffsetName} = {offsetExpression};"));
+                generated.Add(SyntaxFactory.ParseStatement($"int {info.LengthName} = {lengthExpression};"));
+                generated.Add(
+                    SyntaxFactory.ParseStatement(
+                        $"if ({info.OffsetName} < ({boundsOffsetExpression}) || {info.LengthName} < 0 || " +
+                        $"{info.OffsetName} > ({boundsOffsetExpression}) + ({boundsLengthExpression}) - {info.LengthName}) " +
+                        $"{{ UnityEngine.Debug.LogError(\"Span slice is outside the backing array.\"); " +
+                        $"{info.OffsetName} = 0; {info.LengthName} = 0; }}"));
+                loweredStatements = generated;
+                return true;
+            }
+
+            private bool TryGetSpanBacking(ExpressionSyntax initializer,
+                IDictionary<string, SpanInfo> spans, out string arrayExpression,
+                out string offsetExpression, out string lengthExpression,
+                out string boundsOffsetExpression, out string boundsLengthExpression,
+                out List<StatementSyntax> argumentPrelude)
+            {
+                arrayExpression = null;
+                offsetExpression = null;
+                lengthExpression = null;
+                boundsOffsetExpression = null;
+                boundsLengthExpression = null;
+                argumentPrelude = new List<StatementSyntax>();
+
+                if (initializer is IdentifierNameSyntax existing &&
+                    TryGetSpan(existing, spans, out SpanInfo existingInfo))
+                {
+                    arrayExpression = existingInfo.ArrayName;
+                    offsetExpression = existingInfo.OffsetName;
+                    lengthExpression = existingInfo.LengthName;
+                    boundsOffsetExpression = existingInfo.OffsetName;
+                    boundsLengthExpression = existingInfo.LengthName;
+                    return true;
+                }
+
+                if (initializer is InvocationExpressionSyntax invocation &&
+                    invocation.Expression is MemberAccessExpressionSyntax access)
+                {
+                    string operation = access.Name.Identifier.ValueText;
+                    if (operation == "Slice" && access.Expression is IdentifierNameSyntax spanIdentifier &&
+                        TryGetSpan(spanIdentifier, spans, out SpanInfo sliced) &&
+                        IsFrameworkSpanSlice(invocation))
+                    {
+                        Dictionary<string, string> arguments = SpillSpanArguments(
+                            invocation, spans, argumentPrelude);
+                        string start = arguments.TryGetValue("start", out string startValue)
+                            ? startValue : "0";
+                        arrayExpression = sliced.ArrayName;
+                        offsetExpression = $"{sliced.OffsetName} + ({start})";
+                        lengthExpression = arguments.TryGetValue("length", out string lengthValue)
+                            ? lengthValue
+                            : $"__SPAN_REMAINDER__|{sliced.LengthName}|{sliced.OffsetName}";
+                        boundsOffsetExpression = sliced.OffsetName;
+                        boundsLengthExpression = sliced.LengthName;
+                        return true;
+                    }
+
+                    if (operation == "AsSpan" &&
+                        _semanticModel.GetTypeInfo(access.Expression).Type is IArrayTypeSymbol &&
+                        IsFrameworkArrayAsSpan(invocation))
+                    {
+                        Dictionary<string, string> arguments = SpillSpanArguments(
+                            invocation, spans, argumentPrelude);
+                        string start = arguments.TryGetValue("start", out string startValue)
+                            ? startValue : "0";
+                        arrayExpression = access.Expression.ToString();
+                        offsetExpression = start;
+                        lengthExpression = arguments.TryGetValue("length", out string lengthValue)
+                            ? lengthValue
+                            : null;
+                        boundsOffsetExpression = "0";
+                        boundsLengthExpression = "__BACKING_ARRAY_LENGTH__";
+                        return true;
+                    }
+                }
+
+                if (_semanticModel.GetTypeInfo(initializer).Type is IArrayTypeSymbol)
+                {
+                    arrayExpression = initializer.ToString();
+                    offsetExpression = "0";
+                    lengthExpression = null;
+                    boundsOffsetExpression = "0";
+                    boundsLengthExpression = "__BACKING_ARRAY_LENGTH__";
+                    return true;
+                }
+
+                return false;
+            }
+
+            private bool IsFrameworkArrayAsSpan(InvocationExpressionSyntax invocation)
+            {
+                if (!(_semanticModel.GetSymbolInfo(invocation).Symbol is IMethodSymbol method))
+                    return false;
+                IMethodSymbol definition = method.ReducedFrom ?? method;
+                if (definition.Name != "AsSpan" ||
+                    definition.ContainingType?.ToDisplayString() != "System.MemoryExtensions")
+                    return false;
+
+                ImmutableArray<IParameterSymbol> parameters = method.Parameters;
+                return parameters.Length == 0 ||
+                       parameters.Length == 1 && parameters[0].Name == "start" &&
+                       parameters[0].Type.SpecialType == SpecialType.System_Int32 ||
+                       parameters.Length == 2 && parameters[0].Name == "start" &&
+                       parameters[0].Type.SpecialType == SpecialType.System_Int32 &&
+                       parameters[1].Name == "length" &&
+                       parameters[1].Type.SpecialType == SpecialType.System_Int32;
+            }
+
+            private bool IsFrameworkSpanSlice(InvocationExpressionSyntax invocation)
+            {
+                if (!(_semanticModel.GetSymbolInfo(invocation).Symbol is IMethodSymbol method))
+                    return false;
+                string containingType = method.ContainingType?.OriginalDefinition.ToDisplayString();
+                return method.Name == "Slice" &&
+                       (containingType == "System.Span<T>" ||
+                        containingType == "System.ReadOnlySpan<T>");
+            }
+
+            private Dictionary<string, string> SpillSpanArguments(
+                InvocationExpressionSyntax invocation, IDictionary<string, SpanInfo> spans,
+                ICollection<StatementSyntax> prelude)
+            {
+                var values = new Dictionary<string, string>(StringComparer.Ordinal);
+                IMethodSymbol method = _semanticModel.GetSymbolInfo(invocation).Symbol as IMethodSymbol;
+                for (int index = 0; index < invocation.ArgumentList.Arguments.Count; index++)
+                {
+                    ArgumentSyntax argument = invocation.ArgumentList.Arguments[index];
+                    string parameterName = argument.NameColon?.Name.Identifier.ValueText;
+                    if (parameterName == null && method != null && index < method.Parameters.Length)
+                        parameterName = method.Parameters[index].Name;
+                    if (parameterName != "start" && parameterName != "length")
+                        continue;
+
+                    string temporary = $"__uspan_{_temporaryId++}_{parameterName}";
+                    prelude.Add(SyntaxFactory.ParseStatement(
+                        $"int {temporary} = {RewriteSpanExpression(argument.Expression, spans)};"));
+                    values[parameterName] = temporary;
+                }
+
+                return values;
+            }
+
+            private string RewriteSpanExpression(ExpressionSyntax expression,
+                IDictionary<string, SpanInfo> spans)
+            {
+                return ((ExpressionSyntax)new SpanUseRewriter(spans, _semanticModel)
+                    .Visit(expression)).ToString();
+            }
+
+            private bool TryGetSpan(IdentifierNameSyntax identifier,
+                IDictionary<string, SpanInfo> spans, out SpanInfo info)
+            {
+                if (!spans.TryGetValue(identifier.Identifier.ValueText, out info))
+                    return false;
+                return SymbolEqualityComparer.Default.Equals(
+                    _semanticModel.GetSymbolInfo(identifier).Symbol, info.OriginalSymbol);
+            }
+
+            private bool TryLowerSpanToArray(LocalDeclarationStatementSyntax declaration,
+                IDictionary<string, SpanInfo> spans, out IEnumerable<StatementSyntax> loweredStatements)
+            {
+                loweredStatements = null;
+                if (declaration.Declaration.Variables.Count != 1)
+                    return false;
+                VariableDeclaratorSyntax variable = declaration.Declaration.Variables[0];
+                if (!(variable.Initializer?.Value is InvocationExpressionSyntax invocation) ||
+                    !(invocation.Expression is MemberAccessExpressionSyntax access) ||
+                    access.Name.Identifier.ValueText != "ToArray" ||
+                    !(access.Expression is IdentifierNameSyntax identifier) ||
+                    !TryGetSpan(identifier, spans, out SpanInfo info))
+                    return false;
+
+                string copyIndex = $"__uspan_{_temporaryId++}_copy";
+                loweredStatements = new[]
+                {
+                    SyntaxFactory.ParseStatement(
+                        $"{info.ElementType}[] {variable.Identifier.ValueText} = new {info.ElementType}[{info.LengthName}];"),
+                    SyntaxFactory.ParseStatement(
+                        $"for (int {copyIndex} = 0; {copyIndex} < {info.LengthName}; {copyIndex}++) " +
+                        $"{variable.Identifier.ValueText}[{copyIndex}] = {info.ArrayName}[{info.OffsetName} + {copyIndex}];"),
+                };
+                return true;
+            }
+
+            private bool TryLowerSpanOperation(ExpressionStatementSyntax statement,
+                IDictionary<string, SpanInfo> spans, out StatementSyntax loweredStatement)
+            {
+                loweredStatement = null;
+                if (!(statement.Expression is InvocationExpressionSyntax invocation) ||
+                    !(invocation.Expression is MemberAccessExpressionSyntax access) ||
+                    !(access.Expression is IdentifierNameSyntax identifier) ||
+                    !TryGetSpan(identifier, spans, out SpanInfo info))
+                    return false;
+
+                string operation = access.Name.Identifier.ValueText;
+                if (operation != "Clear" && operation != "Fill")
+                    return false;
+                if (info.IsReadOnly)
+                {
+                    Diagnostics.Add(new ExtendedSyntaxLoweringDiagnostic(statement,
+                        "ReadOnlySpan<T> cannot be modified."));
+                    return false;
+                }
+                if (operation == "Fill" && invocation.ArgumentList.Arguments.Count != 1)
+                    return false;
+
+                string index = $"__uspan_{_temporaryId++}_index";
+                string valueName = $"__uspan_{_temporaryId++}_value";
+                string value = operation == "Clear"
+                    ? $"default({info.ElementType})"
+                    : RewriteSpanExpression(invocation.ArgumentList.Arguments[0].Expression, spans);
+                loweredStatement = SyntaxFactory.ParseStatement(
+                    $"{{ {info.ElementType} {valueName} = {value}; " +
+                    $"for (int {index} = 0; {index} < {info.LengthName}; {index}++) " +
+                    $"{info.ArrayName}[{info.OffsetName} + {index}] = {valueName}; }}");
+                return true;
+            }
+
+            private static bool IsSpanType(INamedTypeSymbol type)
+            {
+                string definition = type.OriginalDefinition.ToDisplayString();
+                return definition == "System.Span<T>" || definition == "System.ReadOnlySpan<T>";
+            }
+
+            private sealed class SpanInfo
+            {
+                internal string ArrayName { get; }
+                internal string OffsetName { get; }
+                internal string LengthName { get; }
+                internal string BackingLengthName { get; }
+                internal string ElementType { get; }
+                internal bool IsReadOnly { get; }
+                // Original Roslyn identity prevents rewriting a different local with the same text name.
+                internal ILocalSymbol OriginalSymbol { get; }
+
+                internal SpanInfo(string arrayName, string offsetName, string lengthName,
+                    string backingLengthName,
+                    string elementType, bool isReadOnly, ILocalSymbol originalSymbol)
+                {
+                    ArrayName = arrayName;
+                    OffsetName = offsetName;
+                    LengthName = lengthName;
+                    BackingLengthName = backingLengthName;
+                    ElementType = elementType;
+                    IsReadOnly = isReadOnly;
+                    OriginalSymbol = originalSymbol;
+                }
+            }
+
+            private sealed class SpanUseRewriter : CSharpSyntaxRewriter
+            {
+                private readonly IDictionary<string, SpanInfo> _spans;
+                private readonly SemanticModel _semanticModel;
+
+                internal SpanUseRewriter(IDictionary<string, SpanInfo> spans,
+                    SemanticModel semanticModel)
+                {
+                    _spans = spans;
+                    _semanticModel = semanticModel;
+                }
+
+                public override SyntaxNode VisitElementAccessExpression(ElementAccessExpressionSyntax node)
+                {
+                    if (node.Expression is IdentifierNameSyntax identifier &&
+                        TryGetSpan(identifier, out SpanInfo info) &&
+                        node.ArgumentList.Arguments.Count == 1)
+                    {
+                        string index = ((ExpressionSyntax)Visit(
+                            node.ArgumentList.Arguments[0].Expression)).ToString();
+                        return SyntaxFactory.ParseExpression(
+                            $"{info.ArrayName}[{info.OffsetName} + ({index})]").WithTriviaFrom(node);
+                    }
+
+                    return base.VisitElementAccessExpression(node);
+                }
+
+                public override SyntaxNode VisitMemberAccessExpression(MemberAccessExpressionSyntax node)
+                {
+                    if (node.Expression is IdentifierNameSyntax identifier &&
+                        node.Name.Identifier.ValueText == "Length" &&
+                        TryGetSpan(identifier, out SpanInfo info))
+                        return SyntaxFactory.IdentifierName(info.LengthName).WithTriviaFrom(node);
+
+                    return base.VisitMemberAccessExpression(node);
+                }
+
+                private bool TryGetSpan(IdentifierNameSyntax identifier, out SpanInfo info)
+                {
+                    if (!_spans.TryGetValue(identifier.Identifier.ValueText, out info))
+                        return false;
+                    return SymbolEqualityComparer.Default.Equals(
+                        _semanticModel.GetSymbolInfo(identifier).Symbol, info.OriginalSymbol);
+                }
+            }
+
+            private bool TryLowerArrayPipeline(LocalDeclarationStatementSyntax declaration,
+                out IEnumerable<StatementSyntax> loweredStatements)
+            {
+                loweredStatements = null;
+                if (declaration.SyntaxTree != _semanticModel.SyntaxTree)
+                    return false;
+                if (declaration.Declaration.Variables.Count != 1)
+                    return false;
+
+                VariableDeclaratorSyntax variable = declaration.Declaration.Variables[0];
+                if (!(variable.Initializer?.Value is InvocationExpressionSyntax toArray) ||
+                    !(toArray.Expression is MemberAccessExpressionSyntax toArrayAccess) ||
+                    toArrayAccess.Name.Identifier.ValueText != "ToArray" ||
+                    toArray.ArgumentList.Arguments.Count != 0)
+                    return false;
+
+                if (!IsEnumerableMethod(toArray, "ToArray"))
+                    return false;
+
+                ExpressionSyntax source = toArrayAccess.Expression;
+                var operations = new List<(string Name, LambdaExpressionSyntax Lambda)>();
+                while (source is InvocationExpressionSyntax invocation &&
+                       invocation.Expression is MemberAccessExpressionSyntax access &&
+                       (access.Name.Identifier.ValueText == "Where" ||
+                        access.Name.Identifier.ValueText == "Select") &&
+                       invocation.ArgumentList.Arguments.Count == 1 &&
+                       invocation.ArgumentList.Arguments[0].Expression is LambdaExpressionSyntax lambda &&
+                       IsEnumerableMethod(invocation, access.Name.Identifier.ValueText))
+                {
+                    operations.Add((access.Name.Identifier.ValueText, lambda));
+                    source = access.Expression;
+                }
+
+                if (operations.Count == 0 || !(_semanticModel.GetTypeInfo(source).Type is IArrayTypeSymbol sourceArray))
+                    return false;
+                operations.Reverse();
+
+                bool hasProjection = false;
+                foreach ((string name, LambdaExpressionSyntax _) in operations)
+                {
+                    if (name == "Select")
+                        hasProjection = true;
+                    else if (hasProjection)
+                    {
+                        Diagnostics.Add(new ExtendedSyntaxLoweringDiagnostic(declaration,
+                            "Where after Select is not supported yet because Udon lowering must preserve single evaluation of projections."));
+                        return false;
+                    }
+                }
+
+                if (!(_semanticModel.GetTypeInfo(variable.Initializer.Value).Type is IArrayTypeSymbol resultArray))
+                    return false;
+
+                foreach ((string _, LambdaExpressionSyntax lambda) in operations)
+                {
+                    if (GetLambdaParameter(lambda) == null || !(lambda.Body is ExpressionSyntax))
+                        return false;
+                }
+
+                int id = _temporaryId++;
+                string prefix = $"__ulinq_{id}_";
+                string sourceName = prefix + "source";
+                string bufferName = prefix + "buffer";
+                string countName = prefix + "count";
+                string indexName = prefix + "index";
+                string copyName = prefix + "copy";
+                string sourceElementType = GetTypeSource(sourceArray.ElementType);
+                string resultElementType = GetTypeSource(resultArray.ElementType);
+                string currentExpression = $"{sourceName}[{indexName}]";
+                var conditions = new List<string>();
+
+                foreach ((string name, LambdaExpressionSyntax lambda) in operations)
+                {
+                    string parameter = GetLambdaParameter(lambda);
+                    IParameterSymbol parameterSymbol = GetLambdaParameterSymbol(lambda);
+                    ExpressionSyntax body = (ExpressionSyntax)lambda.Body;
+                    string substituted = new LambdaParameterSubstitution(parameter, parameterSymbol,
+                            _semanticModel, SyntaxFactory.ParseExpression(currentExpression))
+                        .Visit(body).ToString();
+                    if (name == "Where")
+                        conditions.Add(substituted);
+                    else
+                        currentExpression = substituted;
+                }
+
+                var generated = new List<StatementSyntax>
+                {
+                    SyntaxFactory.ParseStatement($"{sourceElementType}[] {sourceName} = {source};"),
+                    SyntaxFactory.ParseStatement($"{resultElementType}[] {bufferName} = new {resultElementType}[{sourceName}.Length];"),
+                    SyntaxFactory.ParseStatement($"int {countName} = 0;")
+                };
+
+                string conditionSource = conditions.Count == 0
+                    ? string.Empty
+                    : $"if (!({string.Join(") || !(", conditions)})) continue;";
+                generated.Add(SyntaxFactory.ParseStatement(
+                    $"for (int {indexName} = 0; {indexName} < {sourceName}.Length; {indexName}++) " +
+                    $"{{ {conditionSource} {bufferName}[{countName}] = {currentExpression}; {countName}++; }}"));
+                generated.Add(SyntaxFactory.ParseStatement(
+                    $"{resultElementType}[] {variable.Identifier.ValueText} = new {resultElementType}[{countName}];"));
+                generated.Add(SyntaxFactory.ParseStatement(
+                    $"for (int {copyName} = 0; {copyName} < {countName}; {copyName}++) " +
+                    $"{variable.Identifier.ValueText}[{copyName}] = {bufferName}[{copyName}];"));
+                loweredStatements = generated;
+                return true;
+            }
+
+            private bool IsEnumerableMethod(InvocationExpressionSyntax invocation, string name)
+            {
+                return _semanticModel.GetSymbolInfo(invocation).Symbol is IMethodSymbol method &&
+                       method.Name == name &&
+                       method.ContainingType?.ToDisplayString() == "System.Linq.Enumerable";
+            }
+
+            private static string GetLambdaParameter(LambdaExpressionSyntax lambda)
+            {
+                if (lambda is SimpleLambdaExpressionSyntax simple)
+                    return simple.Parameter.Identifier.ValueText;
+                if (lambda is ParenthesizedLambdaExpressionSyntax parenthesized &&
+                    parenthesized.ParameterList.Parameters.Count == 1)
+                    return parenthesized.ParameterList.Parameters[0].Identifier.ValueText;
+                return null;
+            }
+
+            private IParameterSymbol GetLambdaParameterSymbol(LambdaExpressionSyntax lambda)
+            {
+                ParameterSyntax parameter = lambda is SimpleLambdaExpressionSyntax simple
+                    ? simple.Parameter
+                    : (lambda as ParenthesizedLambdaExpressionSyntax)?.ParameterList.Parameters
+                        .FirstOrDefault();
+                return parameter == null ? null : _semanticModel.GetDeclaredSymbol(parameter);
+            }
+
+            private bool HasOnlySafeDynamicUses(LocalDeclarationStatementSyntax declaration,
+                string variableName)
+            {
+                if (!(declaration.Parent is BlockSyntax block) ||
+                    !(_semanticModel.GetDeclaredSymbol(declaration.Declaration.Variables[0]) is ILocalSymbol local))
+                    return false;
+
+                foreach (IdentifierNameSyntax reference in block.DescendantNodes()
+                             .OfType<IdentifierNameSyntax>())
+                {
+                    if (reference.Identifier.ValueText != variableName ||
+                        !SymbolEqualityComparer.Default.Equals(
+                            _semanticModel.GetSymbolInfo(reference).Symbol, local))
+                        continue;
+
+                    if (!(reference.Parent is BinaryExpressionSyntax binary))
+                        return false;
+                    ExpressionSyntax other = binary.Left == reference ? binary.Right : binary.Left;
+                    ITypeSymbol otherType = _semanticModel.GetTypeInfo(other).Type;
+                    if (!IsConcreteDynamicType(otherType))
+                        return false;
+                }
+
+                return true;
+            }
+
+            private static bool IsConcreteDynamicType(ITypeSymbol type)
+            {
+                if (type == null || type.TypeKind == TypeKind.Dynamic ||
+                    type.TypeKind == TypeKind.Error || type.TypeKind == TypeKind.TypeParameter ||
+                    type.IsAnonymousType)
+                    return false;
+
+                switch (type.SpecialType)
+                {
+                    case SpecialType.System_Boolean:
+                    case SpecialType.System_Byte:
+                    case SpecialType.System_Char:
+                    case SpecialType.System_Double:
+                    case SpecialType.System_Int16:
+                    case SpecialType.System_Int32:
+                    case SpecialType.System_Int64:
+                    case SpecialType.System_SByte:
+                    case SpecialType.System_Single:
+                    case SpecialType.System_String:
+                    case SpecialType.System_UInt16:
+                    case SpecialType.System_UInt32:
+                    case SpecialType.System_UInt64:
+                        return true;
+                    default:
+                        return false;
+                }
+            }
+
+            private static string GetTypeSource(ITypeSymbol type)
+            {
+                switch (type.SpecialType)
+                {
+                    case SpecialType.System_Boolean: return "bool";
+                    case SpecialType.System_Byte: return "byte";
+                    case SpecialType.System_Char: return "char";
+                    case SpecialType.System_Double: return "double";
+                    case SpecialType.System_Int16: return "short";
+                    case SpecialType.System_Int32: return "int";
+                    case SpecialType.System_Int64: return "long";
+                    case SpecialType.System_SByte: return "sbyte";
+                    case SpecialType.System_Single: return "float";
+                    case SpecialType.System_String: return "string";
+                    case SpecialType.System_UInt16: return "ushort";
+                    case SpecialType.System_UInt32: return "uint";
+                    case SpecialType.System_UInt64: return "ulong";
+                    default:
+                        return type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                }
+            }
+
+            private sealed class LambdaParameterSubstitution : CSharpSyntaxRewriter
+            {
+                private readonly string _parameter;
+                private readonly IParameterSymbol _parameterSymbol;
+                private readonly SemanticModel _semanticModel;
+                private readonly ExpressionSyntax _replacement;
+
+                internal LambdaParameterSubstitution(string parameter, IParameterSymbol parameterSymbol,
+                    SemanticModel semanticModel, ExpressionSyntax replacement)
+                {
+                    _parameter = parameter;
+                    _parameterSymbol = parameterSymbol;
+                    _semanticModel = semanticModel;
+                    _replacement = replacement;
+                }
+
+                public override SyntaxNode VisitIdentifierName(IdentifierNameSyntax node)
+                {
+                    bool isParameter = _parameterSymbol != null
+                        ? SymbolEqualityComparer.Default.Equals(
+                            _semanticModel.GetSymbolInfo(node).Symbol, _parameterSymbol)
+                        : node.Identifier.ValueText == _parameter;
+                    return isParameter
+                        ? _replacement.WithTriviaFrom(node)
+                        : base.VisitIdentifierName(node);
+                }
+            }
+        }
+    }
+
     internal sealed class AsyncSyntaxLoweringDiagnostic
     {
         internal SyntaxNode Node { get; }
@@ -1220,6 +2004,25 @@ namespace UdonSharp.Compiler.Lowering
             CSharpCompilation compilation)
         {
             bool changed = false;
+            foreach (ModuleBinding module in modules)
+            {
+                SemanticModel model = compilation.GetSemanticModel(module.tree);
+                ExtendedSyntaxLoweringResult result = ExtendedSyntaxLowerer.Rewrite(module.tree,
+                    declaration => model.GetDeclaredSymbol(declaration) is INamedTypeSymbol type &&
+                                   type.IsUdonSharpBehaviour(), model);
+                foreach (ExtendedSyntaxLoweringDiagnostic diagnostic in result.Diagnostics)
+                    context.AddDiagnostic(DiagnosticSeverity.Error, diagnostic.Node, diagnostic.Message);
+
+                if (!result.Changed)
+                    continue;
+
+                module.tree = result.Tree;
+                changed = true;
+            }
+
+            if (changed)
+                compilation = compilation.RemoveAllSyntaxTrees().AddSyntaxTrees(modules.Select(module => module.tree));
+
             foreach (ModuleBinding module in modules)
             {
                 SemanticModel model = compilation.GetSemanticModel(module.tree);

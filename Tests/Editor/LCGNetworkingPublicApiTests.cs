@@ -371,6 +371,215 @@ public class Derived : Base
         }
 
         [Test]
+        public void ExtendedSyntaxLowering_LowersConcreteDynamicLocals()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+public class Sample
+{
+    public int Run()
+    {
+        dynamic value = 41;
+        return value + 1;
+    }
+}");
+
+            Compiler.Lowering.ExtendedSyntaxLoweringResult result = RewriteExtendedWithSemantics(source);
+            string lowered = result.Tree.GetRoot().ToFullString();
+
+            Assert.That(result.Diagnostics, Is.Empty);
+            Assert.That(result.Changed, Is.True);
+            Assert.That(lowered, Does.Not.Contain("dynamic value"));
+            Assert.That(lowered, Does.Contain("int value"));
+            AssertExtendedTreeCompiles(result);
+        }
+
+        [Test]
+        public void ExtendedSyntaxLowering_LowersArrayLinqAndCapturedLambdasToLoops()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System.Linq;
+public class Sample
+{
+    public int[] Run(int[] values, int minimum, int scale)
+    {
+        int[] result = values.Where(value => value >= minimum)
+            .Select(value => value * scale).ToArray();
+        return result;
+    }
+}");
+
+            Compiler.Lowering.ExtendedSyntaxLoweringResult result = RewriteExtendedWithSemantics(source);
+            string lowered = result.Tree.GetRoot().ToFullString();
+
+            Assert.That(result.Diagnostics, Is.Empty);
+            Assert.That(result.Changed, Is.True);
+            Assert.That(lowered, Does.Not.Contain(".Where"));
+            Assert.That(lowered, Does.Not.Contain(".Select"));
+            Assert.That(lowered, Does.Contain("minimum"));
+            Assert.That(lowered, Does.Contain("scale"));
+            Assert.That(lowered, Does.Contain("for ("));
+            AssertExtendedTreeCompiles(result);
+        }
+
+        [Test]
+        public void ExtendedSyntaxLowering_DiagnosesEscapingDelegatesAndUnprovenDynamic()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System;
+public class Sample
+{
+    public Func<int, int> Escape(int amount) => value => value + amount;
+    public int Read(dynamic value) => value.Missing();
+}");
+
+            Compiler.Lowering.ExtendedSyntaxLoweringResult result = RewriteExtendedWithSemantics(source);
+            Assert.That(result.Diagnostics.Select(diagnostic => diagnostic.Message),
+                Has.Some.Contains("Escaping delegates"));
+            Assert.That(result.Diagnostics.Select(diagnostic => diagnostic.Message),
+                Has.Some.Contains("runtime dynamic dispatch"));
+        }
+
+        [Test]
+        public void ExtendedSyntaxLowering_LowersArrayBackedSpanLocals()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System;
+public class Sample
+{
+    public int[] Run(int[] values)
+    {
+        Span<int> window = values.AsSpan(1, 3);
+        window[0] = 9;
+        int length = window.Length;
+        window.Fill(length);
+        int[] copy = window.ToArray();
+        window.Clear();
+        return copy;
+    }
+}");
+
+            Compiler.Lowering.ExtendedSyntaxLoweringResult result = RewriteExtendedWithSemantics(source);
+            string lowered = result.Tree.GetRoot().ToFullString();
+
+            Assert.That(result.Diagnostics, Is.Empty);
+            Assert.That(result.Changed, Is.True);
+            Assert.That(lowered, Does.Not.Contain("Span<int>"));
+            Assert.That(lowered, Does.Not.Contain(".Fill"));
+            Assert.That(lowered, Does.Not.Contain(".Clear"));
+            Assert.That(lowered, Does.Contain("__uspan_"));
+            Assert.That(lowered, Does.Contain("for ("));
+            AssertExtendedTreeCompiles(result);
+        }
+
+        [Test]
+        public void ExtendedSyntaxLowering_DiagnosesSpanParameters()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System;
+public class Sample { public int Read(Span<int> value) => value[0]; }");
+
+            Compiler.Lowering.ExtendedSyntaxLoweringResult result = RewriteExtendedWithSemantics(source);
+            Assert.That(result.Diagnostics.Select(diagnostic => diagnostic.Message),
+                Has.Some.Contains("Only method-local array-backed"));
+        }
+
+        [Test]
+        public void ExtendedSyntaxLowering_BindsNamedSpanArgumentsAndParentSliceBounds()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System;
+public class Sample
+{
+    public int NextStart() => 1;
+    public int NextLength() => 3;
+    public int[] Run(int[] values)
+    {
+        Span<int> parent = values.AsSpan(length: NextLength(), start: NextStart());
+        Span<int> child = parent.Slice(length: 1, start: parent[0]);
+        child.Fill(parent[0]);
+        if (child.Length > 0)
+            child[0] = parent[0];
+        return child.ToArray();
+    }
+}");
+
+            Compiler.Lowering.ExtendedSyntaxLoweringResult result = RewriteExtendedWithSemantics(source);
+            string lowered = result.Tree.GetRoot().ToFullString();
+            Assert.That(result.Diagnostics, Is.Empty);
+            Assert.That(lowered, Does.Contain("_parent_length"));
+            Assert.That(lowered, Does.Contain("_parent_offset"));
+            Assert.That(lowered, Does.Not.Contain("parent[0]"));
+            Assert.That(lowered.IndexOf("= NextLength();", StringComparison.Ordinal),
+                Is.LessThan(lowered.IndexOf("= NextStart();", StringComparison.Ordinal)));
+            AssertExtendedTreeCompiles(result);
+        }
+
+        [Test]
+        public void ExtendedSyntaxLowering_DoesNotBypassCustomAsSpanExtensions()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System;
+public static class CustomExtensions
+{
+    public static Span<int> AsSpan(this int[] values, int start, int length)
+        => new Span<int>(values, start + 1, length);
+}
+public class Sample
+{
+    public void Run(int[] values)
+    {
+        Span<int> custom = values.AsSpan(0, 1);
+    }
+}");
+
+            Compiler.Lowering.ExtendedSyntaxLoweringResult result = RewriteExtendedWithSemantics(source);
+            Assert.That(result.Changed, Is.False);
+            Assert.That(result.Diagnostics.Select(diagnostic => diagnostic.Message),
+                Has.Some.Contains("Only method-local array-backed"));
+        }
+
+        [Test]
+        public void ExtendedSyntaxLowering_DoesNotTreatEscapedNamesAsDynamicOrSystemSpan()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+public class Span<T> { }
+public class Sample
+{
+    public int Run()
+    {
+        int @dynamic = 1;
+        Span<int> value = null;
+        return @dynamic;
+    }
+}");
+
+            Compiler.Lowering.ExtendedSyntaxLoweringResult result = RewriteExtendedWithSemantics(source);
+            Assert.That(result.Diagnostics, Is.Empty);
+            Assert.That(result.Changed, Is.False);
+        }
+
+        [Test]
+        public void ExtendedSyntaxLowering_RejectsWhereAfterSelectUntilProjectionSpillingExists()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System.Linq;
+public class Sample
+{
+    public int Next(int value) => value + 1;
+    public int[] Run(int[] values)
+    {
+        int[] result = values.Select(value => Next(value))
+            .Where(value => value > 0).ToArray();
+        return result;
+    }
+}");
+
+            Compiler.Lowering.ExtendedSyntaxLoweringResult result = RewriteExtendedWithSemantics(source);
+            Assert.That(result.Diagnostics.Select(diagnostic => diagnostic.Message),
+                Has.Some.Contains("Where after Select"));
+        }
+
+        [Test]
         public void GenericRestrictions_RejectListTypeReferences()
         {
             CSharpCompilation compilation = CreateGenericRestrictionCompilation(@"
@@ -617,6 +826,46 @@ public class Invalid : First, Second { }");
                 references, new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
             return Compiler.Lowering.AsyncSyntaxLowerer.Rewrite(tree, declaration => true,
                 compilation.GetSemanticModel(tree));
+        }
+
+        private static Compiler.Lowering.ExtendedSyntaxLoweringResult RewriteExtendedWithSemantics(SyntaxTree tree)
+        {
+            MetadataReference[] references = new[]
+                {
+                    typeof(object).Assembly.Location,
+                    typeof(Enumerable).Assembly.Location,
+                    typeof(System.Dynamic.DynamicObject).Assembly.Location,
+                    typeof(Span<>).Assembly.Location,
+                    typeof(Debug).Assembly.Location,
+                }
+                .Distinct()
+                .Select(location => MetadataReference.CreateFromFile(location))
+                .ToArray();
+            CSharpCompilation compilation = CSharpCompilation.Create("ExtendedSemanticTest", new[] { tree },
+                references, new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            return Compiler.Lowering.ExtendedSyntaxLowerer.Rewrite(tree, declaration => true,
+                compilation.GetSemanticModel(tree));
+        }
+
+        private static void AssertExtendedTreeCompiles(
+            Compiler.Lowering.ExtendedSyntaxLoweringResult result)
+        {
+            MetadataReference[] references = new[]
+                {
+                    typeof(object).Assembly.Location,
+                    typeof(Enumerable).Assembly.Location,
+                    typeof(Span<>).Assembly.Location,
+                    typeof(Debug).Assembly.Location,
+                }
+                .Distinct()
+                .Select(location => MetadataReference.CreateFromFile(location))
+                .ToArray();
+            CSharpCompilation compilation = CSharpCompilation.Create("LoweredExtendedSemanticTest",
+                new[] { result.Tree }, references,
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            Assert.That(compilation.GetDiagnostics()
+                    .Where(diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error),
+                Is.Empty);
         }
     }
 }
