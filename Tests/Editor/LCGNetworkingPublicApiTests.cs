@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.Serialization;
+using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using NUnit.Framework;
@@ -180,6 +181,39 @@ public class PacketReceiver
             Assert.That(targeted, Has.Length.EqualTo(9));
             Assert.That(typeof(UdonSharpBehaviour).GetMethod(nameof(UdonSharpBehaviour.ForceSendPacket),
                 new[] { typeof(string) }), Is.Not.Null);
+        }
+
+        [Test]
+        public void VRCAsync_ExposesBuildTimeAwaitableApi()
+        {
+            Assert.That(typeof(VRCAsync).GetMethod(nameof(VRCAsync.LoadStringAsync)).ReturnType,
+                Is.EqualTo(typeof(Task<VRC.SDK3.StringLoading.IVRCStringDownload>)));
+            Assert.That(typeof(VRCAsync).GetMethod(nameof(VRCAsync.LoadImageAsync)).ReturnType,
+                Is.EqualTo(typeof(Task<VRC.SDK3.Image.IVRCImageDownload>)));
+            Assert.That(typeof(VRCAsync).GetMethod(nameof(VRCAsync.LoadVideoAsync)).ReturnType,
+                Is.EqualTo(typeof(Task<VRCVideoLoadResult>)));
+            Assert.That(typeof(VRCAsync).GetMethod(nameof(VRCAsync.WaitForVideoEndAsync)).ReturnType,
+                Is.EqualTo(typeof(Task<VRCVideoPlaybackResult>)));
+            Assert.That(typeof(VRCAsync).GetMethod(nameof(VRCAsync.RequestGPUReadbackAsync)).ReturnType,
+                Is.EqualTo(typeof(Task<VRC.SDK3.Rendering.VRCAsyncGPUReadbackRequest>)));
+            Assert.That(typeof(VRCAsync).GetMethod(nameof(VRCAsync.RequestSerializationAsync)).ReturnType,
+                Is.EqualTo(typeof(Task<VRC.Udon.Common.SerializationResult>)));
+        }
+
+        [Test]
+        public void Compiler_HasLowerPhaseAndSdkAdapterRegistry()
+        {
+            Assembly compilerAssembly = typeof(Compiler.UdonSharpCompilerV1).Assembly;
+            Type contextType = compilerAssembly.GetType("UdonSharp.Compiler.CompilationContext", true);
+            Type phaseType = contextType.GetNestedType("CompilePhase", BindingFlags.Public | BindingFlags.NonPublic);
+            Assert.That(Enum.GetNames(phaseType), Does.Contain("Lower"));
+
+            Type registryType = compilerAssembly.GetType(
+                "UdonSharp.Compiler.Lowering.SdkCallbackAdapterRegistry", true);
+            PropertyInfo adapters = registryType.GetProperty("Adapters",
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+            Array values = ((System.Collections.IEnumerable)adapters.GetValue(null)).Cast<object>().ToArray();
+            Assert.That(values.Length, Is.GreaterThanOrEqualTo(8));
         }
     }
 }

@@ -52,7 +52,7 @@ namespace UdonSharp
         private static UdonSharpEditorCache _instance;
         private static readonly object _instanceLock = new object();
 
-        private const int CURR_CACHE_VER = 2;
+        private const int CURR_CACHE_VER = 3;
         
         private static UdonSharpEditorCache GetInstance()
         {

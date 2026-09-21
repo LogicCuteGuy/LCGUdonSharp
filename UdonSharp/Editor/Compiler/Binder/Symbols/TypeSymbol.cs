@@ -156,11 +156,9 @@ namespace UdonSharp.Compiler.Symbols
                 Location location = interfaceType.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()?.GetLocation() ??
                                     RoslynSymbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()?.GetLocation();
 
-                if (interfaceType.IsGenericType)
-                    throw new CompilerException($"U# interfaces cannot be generic: '{interfaceType}'", location);
-
-                if (interfaceType.Interfaces.Length > 0)
-                    throw new CompilerException($"U# interface inheritance is not supported: '{interfaceType}'", location);
+                if (interfaceType.IsUnboundGenericType ||
+                    interfaceType.TypeArguments.Any(argument => ContainsOpenTypeParameter(argument)))
+                    throw new CompilerException($"U# interfaces must be closed over concrete types: '{interfaceType}'", location);
 
                 foreach (ISymbol member in interfaceType.GetMembers())
                 {
@@ -187,6 +185,18 @@ namespace UdonSharp.Compiler.Symbols
                 if (method.ExplicitInterfaceImplementations.Length > 0)
                     throw new CompilerException($"U# explicit interface implementations are not supported: '{method}'", method.Locations.FirstOrDefault());
             }
+        }
+
+        private static bool ContainsOpenTypeParameter(ITypeSymbol type)
+        {
+            if (type.TypeKind == TypeKind.TypeParameter)
+                return true;
+
+            if (type is IArrayTypeSymbol arrayType)
+                return ContainsOpenTypeParameter(arrayType.ElementType);
+
+            return type is INamedTypeSymbol namedType &&
+                   namedType.TypeArguments.Any(ContainsOpenTypeParameter);
         }
 
         public Dictionary<TypeSymbol, HashSet<Symbol>> CollectReferencedUnboundSymbols(BindContext context, IEnumerable<Symbol> extraBindMembers)

@@ -42,6 +42,7 @@ namespace UdonSharp.Compiler
         public MonoScript programScript;
         public BindContext binding;
         public string assembly;
+        public Lowering.ExtendedLoweringPlan loweringPlan;
     }
     
     internal class CompilationContext
@@ -73,6 +74,10 @@ namespace UdonSharp.Compiler
             /// Roslyn has run its compilation and error checking, we are now binding all symbol references and solving for dependencies.
             /// </summary>
             Bind,
+            /// <summary>
+            /// Rewrites extended C# constructs into Udon-safe bound nodes and build-time specializations.
+            /// </summary>
+            Lower,
             /// <summary>
             /// Emitting the assembly modules' uasm instructions and serialized heap values for each program
             /// </summary>
@@ -769,6 +774,138 @@ namespace UdonSharp.Compiler
                 return types;
             
             return ImmutableArray<TypeSymbol>.Empty;
+        }
+    }
+}
+
+namespace UdonSharp.Compiler.Lowering
+{
+    internal enum CallbackCorrelation
+    {
+        ResultIdentity,
+        UrlFifo,
+        SingleFlight,
+        Coalesced,
+        PlayerFifo,
+        ProductFifo,
+    }
+
+    internal sealed class SdkCallbackAdapter
+    {
+        internal string IntrinsicMethod { get; }
+        internal string InitiatingMethod { get; }
+        internal ImmutableArray<string> CompletionEvents { get; }
+        internal string ResultType { get; }
+        internal CallbackCorrelation Correlation { get; }
+        internal bool MayRemainPending { get; }
+
+        internal SdkCallbackAdapter(string intrinsicMethod, string initiatingMethod,
+            string resultType, CallbackCorrelation correlation, bool mayRemainPending,
+            params string[] completionEvents)
+        {
+            IntrinsicMethod = intrinsicMethod;
+            InitiatingMethod = initiatingMethod;
+            ResultType = resultType;
+            Correlation = correlation;
+            MayRemainPending = mayRemainPending;
+            CompletionEvents = completionEvents.ToImmutableArray();
+        }
+    }
+
+    internal static class SdkCallbackAdapterRegistry
+    {
+        internal static ImmutableArray<SdkCallbackAdapter> Adapters { get; } = ImmutableArray.Create(
+            new SdkCallbackAdapter("LoadStringAsync", "VRCStringDownloader.LoadUrl",
+                "VRC.SDK3.StringLoading.IVRCStringDownload", CallbackCorrelation.UrlFifo, false,
+                "OnStringLoadSuccess", "OnStringLoadError"),
+            new SdkCallbackAdapter("LoadImageAsync", "VRCImageDownloader.DownloadImage",
+                "VRC.SDK3.Image.IVRCImageDownload", CallbackCorrelation.ResultIdentity, false,
+                "OnImageLoadSuccess", "OnImageLoadError"),
+            new SdkCallbackAdapter("LoadVideoAsync", "BaseVRCVideoPlayer.LoadURL",
+                "UdonSharp.VRCVideoLoadResult", CallbackCorrelation.SingleFlight, false,
+                "OnVideoReady", "OnVideoError"),
+            new SdkCallbackAdapter("WaitForVideoEndAsync", "",
+                "UdonSharp.VRCVideoPlaybackResult", CallbackCorrelation.SingleFlight, false,
+                "OnVideoEnd", "OnVideoError"),
+            new SdkCallbackAdapter("RequestGPUReadbackAsync", "VRCAsyncGPUReadback.Request",
+                "VRC.SDK3.Rendering.VRCAsyncGPUReadbackRequest", CallbackCorrelation.SingleFlight, false,
+                "OnAsyncGpuReadbackComplete"),
+            new SdkCallbackAdapter("RequestSerializationAsync", "UdonBehaviour.RequestSerialization",
+                "VRC.Udon.Common.SerializationResult", CallbackCorrelation.Coalesced, false,
+                "OnPostSerialization"),
+            new SdkCallbackAdapter("ListAvailableProductsAsync", "Store.ListAvailableProducts",
+                "VRC.Economy.IProduct[]", CallbackCorrelation.SingleFlight, true,
+                "OnListAvailableProducts"),
+            new SdkCallbackAdapter("ListPurchasesAsync", "Store.ListPurchases",
+                "UdonSharp.VRCPlayerPurchasesResult", CallbackCorrelation.PlayerFifo, true,
+                "OnListPurchases"),
+            new SdkCallbackAdapter("ListProductOwnersAsync", "Store.ListProductOwners",
+                "UdonSharp.VRCProductOwnersResult", CallbackCorrelation.ProductFifo, true,
+                "OnListProductOwners"));
+
+        internal static bool TryGet(string methodName, out SdkCallbackAdapter adapter)
+        {
+            adapter = Adapters.FirstOrDefault(candidate =>
+                string.Equals(candidate.IntrinsicMethod, methodName, StringComparison.Ordinal));
+            return adapter != null;
+        }
+    }
+
+    internal sealed class ExtendedLoweringPlan
+    {
+        internal static readonly ExtendedLoweringPlan Empty =
+            new ExtendedLoweringPlan(ImmutableArray<SdkCallbackAdapter>.Empty, false);
+
+        internal ImmutableArray<SdkCallbackAdapter> CallbackAdapters { get; }
+        internal bool UsesAsyncState { get; }
+        internal bool RequiresGeneratedState => UsesAsyncState || CallbackAdapters.Length > 0;
+
+        internal ExtendedLoweringPlan(ImmutableArray<SdkCallbackAdapter> callbackAdapters, bool usesAsyncState)
+        {
+            CallbackAdapters = callbackAdapters;
+            UsesAsyncState = usesAsyncState;
+        }
+    }
+
+    internal static class LoweringPipeline
+    {
+        internal static void Lower(CompilationContext context, ModuleBinding[] modules)
+        {
+            foreach (ModuleBinding module in modules)
+                module.loweringPlan = CreatePlan(module);
+
+            if (modules.Any(module => module.loweringPlan.RequiresGeneratedState))
+            {
+                int frameCapacity = UdonSharpSettings.GetSettings().asyncTaskFrameCapacity;
+                if (frameCapacity < 1 || frameCapacity > 256)
+                    context.AddDiagnostic(DiagnosticSeverity.Error, (Location)null,
+                        "Async task frame capacity must be between 1 and 256.");
+            }
+        }
+
+        private static ExtendedLoweringPlan CreatePlan(ModuleBinding module)
+        {
+            var root = module.tree.GetRoot();
+            bool usesAsync = root.DescendantNodes().Any(node => node.IsKind(SyntaxKind.AwaitExpression)) ||
+                             root.DescendantTokens().Any(token => token.IsKind(SyntaxKind.AsyncKeyword));
+            var adapters = ImmutableArray.CreateBuilder<SdkCallbackAdapter>();
+
+            foreach (var invocation in root.DescendantNodes()
+                         .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax>())
+            {
+                IMethodSymbol method = module.semanticModel.GetSymbolInfo(invocation).Symbol as IMethodSymbol;
+                if (method?.ContainingType?.ToDisplayString() != "UdonSharp.VRCAsync" ||
+                    !SdkCallbackAdapterRegistry.TryGet(method.Name, out SdkCallbackAdapter adapter) ||
+                    adapters.Contains(adapter))
+                    continue;
+
+                adapters.Add(adapter);
+            }
+
+            if (!usesAsync && adapters.Count == 0)
+                return ExtendedLoweringPlan.Empty;
+
+            return new ExtendedLoweringPlan(adapters.ToImmutable(), usesAsync);
         }
     }
 }

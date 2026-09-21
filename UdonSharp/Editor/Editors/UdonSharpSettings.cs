@@ -61,6 +61,9 @@ public class <TemplateClassName> : UdonSharpBehaviour
         public bool disableUploadCompile = false;
         public TextAsset newScriptTemplateOverride = null;
 
+        [Range(1, 256)]
+        public int asyncTaskFrameCapacity = 32;
+
         public string[] scanningDirectoryBlacklist = Array.Empty<string>();
 
         // Interface settings
@@ -203,6 +206,7 @@ public class <TemplateClassName> : UdonSharpBehaviour
         private static readonly GUIContent _outputLogWatcherModeLabel = new GUIContent("Output log watch mode", "The log watcher will read log messages from the VRC log and forward them to the editor's console. Prefix mode will only show messages with a given prefix string.");
         private static readonly GUIContent _prefixArrayLabel = new GUIContent("Prefixes", "The list of prefixes that the log watcher will forward to the editor from in-game");
         private static readonly GUIContent _defaultBehaviourEditorLabel = new GUIContent("Default Behaviour Editor", "The default editor for U# behaviours, this is what will handle inspector drawing by default.");
+        private static readonly GUIContent _asyncTaskFrameCapacityLabel = new GUIContent("Async task frame capacity", "Maximum compiler-generated async frames per behaviour (1-256). State is allocated only for behaviours that use async lowering.");
 
         private static string DrawCustomEditorSelection(string currentSelection)
         {
@@ -258,6 +262,8 @@ public class <TemplateClassName> : UdonSharpBehaviour
                     EditorGUILayout.PropertyField(settingsObject.FindProperty(nameof(UdonSharpSettings.waitForFocus)), _waitForFocusLabel);
 
                     EditorGUILayout.PropertyField(settingsObject.FindProperty(nameof(UdonSharpSettings.disableUploadCompile)), _disableUploadCompileLabel);
+
+                    EditorGUILayout.PropertyField(settingsObject.FindProperty(nameof(UdonSharpSettings.asyncTaskFrameCapacity)), _asyncTaskFrameCapacityLabel);
 
                     if (settings.disableUploadCompile)
                     {

@@ -49,7 +49,7 @@ namespace UdonSharp.Compiler.Binder
                 PushRecursiveValues(selfLinkage.ParameterValues, context);
             }
             
-            ReleaseCowReferences(context);
+            ReleaseCowReferencesPreservingByRefLocations(context);
 
             if (isRecursiveCall)
             {
@@ -88,6 +88,7 @@ namespace UdonSharp.Compiler.Binder
             returnPointVal.DefaultValue = returnPoint.Address;
 
             Value recursiveRet = null;
+            Value[] recursiveByRefResults = null;
 
             if (isRecursiveCall)
             {
@@ -95,6 +96,16 @@ namespace UdonSharp.Compiler.Binder
                 {
                     recursiveRet = context.CreateInternalValue(linkage.ReturnValue.UserType);
                     context.Module.AddCopy(linkage.ReturnValue, recursiveRet);
+                }
+
+                recursiveByRefResults = new Value[Method.Parameters.Length];
+                for (int i = 0; i < Method.Parameters.Length; ++i)
+                {
+                    if (!Method.Parameters[i].IsOut)
+                        continue;
+
+                    recursiveByRefResults[i] = context.CreateInternalValue(linkage.ParameterValues[i].UserType);
+                    context.Module.AddCopy(linkage.ParameterValues[i], recursiveByRefResults[i]);
                 }
 
                 PopRecursiveValues(recursiveValues, context);
@@ -105,12 +116,10 @@ namespace UdonSharp.Compiler.Binder
             {
                 if (!Method.Parameters[i].IsOut) continue;
                 
-                if (isRecursiveCall)
-                    throw new CompilerException("U# does not yet support calling user methods with ref/out parameters from methods marked with RecursiveMethod");
-                
                 BoundAccessExpression paramAccess = (BoundAccessExpression)ParameterExpressions[i];
-
-                paramAccess.EmitSet(context, BoundAccessExpression.BindAccess(linkage.ParameterValues[i]));
+                Value copyBackValue = isRecursiveCall ? recursiveByRefResults[i] : linkage.ParameterValues[i];
+                paramAccess.EmitSet(context, BoundAccessExpression.BindAccess(copyBackValue));
+                paramAccess.ReleaseCowReferences(context);
             }
 
             // Properties need to return the value that they are set to for assignment expressions

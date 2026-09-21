@@ -4,7 +4,6 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using UdonSharp.Compiler.Emit;
 using UdonSharp.Compiler.Symbols;
-using UdonSharp.Core;
 
 namespace UdonSharp.Compiler.Binder
 {
@@ -123,9 +122,6 @@ namespace UdonSharp.Compiler.Binder
             if (Method.Parameters.Length > 0 &&
                 Method.Parameters.Any(e => e.IsOut))
             {
-                if (isRecursiveCall)
-                    throw new CompilerException("U# does not yet support calling user methods with ref/out parameters from methods marked with RecursiveMethod");
-
                 MethodSymbol getProgramVariableMethod = context.GetTypeSymbol(typeof(UdonSharpBehaviour))
                     .GetMembers<MethodSymbol>("GetProgramVariable", context)
                     .First(e => e.Parameters.Length == 1 && 

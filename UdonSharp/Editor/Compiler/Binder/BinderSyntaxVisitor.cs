@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 using System.Linq;
 using System.Text;
 using UdonSharp.Compiler.Symbols;
@@ -388,6 +389,8 @@ namespace UdonSharp.Compiler.Binder
                 nameSyntax.Identifier.Text == "nameof")
                 return HandleNameOfExpression(node);
 
+            ValidateByRefArguments(node);
+
             BoundExpression instanceExpression = null;
             
             if (node.Expression is MemberAccessExpressionSyntax accessExpressionSyntax)
@@ -515,6 +518,49 @@ namespace UdonSharp.Compiler.Binder
                 invocation.MarkForcedBaseCall();
 
             return invocation;
+        }
+
+        private void ValidateByRefArguments(InvocationExpressionSyntax node)
+        {
+            if (!(SymbolLookupModel.GetOperation(node) is IInvocationOperation operation))
+                return;
+
+            HashSet<string> byRefLocations = new HashSet<string>(StringComparer.Ordinal);
+            foreach (IArgumentOperation argument in operation.Arguments)
+            {
+                RefKind refKind = argument.Parameter?.RefKind ?? RefKind.None;
+                if (refKind == RefKind.In)
+                    throw new CompilerException("U# does not support 'in' parameters", argument.Syntax.GetLocation());
+                if (refKind != RefKind.Ref && refKind != RefKind.Out)
+                    continue;
+
+                string locationKey = GetByRefLocationKey(argument.Value.Syntax);
+                if (!byRefLocations.Add(locationKey))
+                    throw new CompilerException(
+                        "The same storage location cannot be passed to multiple ref/out parameters because copy-back order would be ambiguous",
+                        argument.Syntax.GetLocation());
+            }
+        }
+
+        private string GetByRefLocationKey(SyntaxNode syntax)
+        {
+            if (syntax is ElementAccessExpressionSyntax elementAccess)
+            {
+                ISymbol arraySymbol = SymbolLookupModel.GetSymbolInfo(elementAccess.Expression).Symbol;
+                string arrayKey = arraySymbol?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) ??
+                                  elementAccess.Expression.WithoutTrivia().ToString();
+                var constantIndices = elementAccess.ArgumentList.Arguments
+                    .Select(argument => SymbolLookupModel.GetConstantValue(argument.Expression))
+                    .ToArray();
+                if (constantIndices.All(value => value.HasValue))
+                    return arrayKey + "[" + string.Join(",", constantIndices.Select(value => value.Value)) + "]";
+
+                return arrayKey + "[*]";
+            }
+
+            ISymbol symbol = SymbolLookupModel.GetSymbolInfo(syntax).Symbol;
+            return symbol?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) ??
+                   syntax.WithoutTrivia().ToString();
         }
 
         public override BoundNode VisitLocalDeclarationStatement(LocalDeclarationStatementSyntax node)

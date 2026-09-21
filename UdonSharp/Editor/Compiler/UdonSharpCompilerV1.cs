@@ -583,6 +583,11 @@ namespace UdonSharp.Compiler
 
             if (compilationContext.ErrorCount > 0) return;
 
+            compilationContext.CurrentPhase = CompilationContext.CompilePhase.Lower;
+            Lowering.LoweringPipeline.Lower(compilationContext, syntaxTrees);
+
+            if (compilationContext.ErrorCount > 0) return;
+
             System.Reflection.Assembly assembly = null;
             try
             {

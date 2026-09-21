@@ -548,6 +548,18 @@ namespace UdonSharp.Compiler.Binder
             }
         }
 
+        protected void ReleaseCowReferencesPreservingByRefLocations(EmitContext context)
+        {
+            context.ReleaseCowValues(this);
+            for (int i = 0; i < ParameterExpressions.Length; ++i)
+            {
+                if (!Method.Parameters[i].IsOut)
+                    ParameterExpressions[i].ReleaseCowReferences(context);
+            }
+
+            SourceExpression?.ReleaseCowReferences(context);
+        }
+
         protected Value[] GetParameterValues(EmitContext context)
         {
             Value.CowValue[] parameterCows = context.GetExpressionCowValues(this, "parameters");
