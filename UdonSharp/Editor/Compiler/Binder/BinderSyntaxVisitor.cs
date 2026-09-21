@@ -340,6 +340,11 @@ namespace UdonSharp.Compiler.Binder
 
         public override BoundNode VisitTypeOfExpression(TypeOfExpressionSyntax node)
         {
+            ITypeSymbol roslynType = SymbolLookupModel.GetTypeInfo(node.Type).Type;
+            string violation = GenericRestrictionPolicy.GetViolation(roslynType, GenericUseSite.RuntimeType);
+            if (violation != null)
+                throw new CompilerException(violation, node.GetLocation());
+
             TypeSymbol type = GetTypeSymbol(node.Type);
 
             if (!type.IsExtern)
@@ -966,6 +971,11 @@ namespace UdonSharp.Compiler.Binder
         {
             if (node.Initializer != null)
                 throw new NotSupportedException(LocStr.CE_InitializerListsNotSupported, node);
+
+            ITypeSymbol createdType = SymbolLookupModel.GetTypeInfo(node).Type;
+            string violation = GenericRestrictionPolicy.GetViolation(createdType, GenericUseSite.ObjectCreation);
+            if (violation != null)
+                throw new CompilerException(violation, node.GetLocation());
 
             MethodSymbol constructorSymbol = (MethodSymbol)GetSymbol(node);
 

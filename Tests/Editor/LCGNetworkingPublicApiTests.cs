@@ -215,5 +215,204 @@ public class PacketReceiver
             Array values = ((System.Collections.IEnumerable)adapters.GetValue(null)).Cast<object>().ToArray();
             Assert.That(values.Length, Is.GreaterThanOrEqualTo(8));
         }
+
+        [Test]
+        public void GenericRestrictions_RejectListTypeReferences()
+        {
+            CSharpCompilation compilation = CreateGenericRestrictionCompilation(@"
+using System.Collections.Generic;
+public class Sample { public List<int> Values; }");
+            ITypeSymbol listType = compilation.GetTypeByMetadataName("Sample")
+                .GetMembers("Values").OfType<IFieldSymbol>().Single().Type;
+
+            string violation = Compiler.GenericRestrictionPolicy.GetViolation(
+                listType, Compiler.GenericUseSite.TypeReference);
+
+            Assert.That(violation, Does.Contain("List<T>"));
+        }
+
+        [Test]
+        public void GenericRestrictions_RejectListNestedInsideAnotherType()
+        {
+            CSharpCompilation compilation = CreateGenericRestrictionCompilation(@"
+using System.Collections.Generic;
+public class Wrapper<T> { }
+public class Sample { public Wrapper<List<int>> Values; }");
+            ITypeSymbol wrapperType = compilation.GetTypeByMetadataName("Sample")
+                .GetMembers("Values").OfType<IFieldSymbol>().Single().Type;
+
+            string violation = Compiler.GenericRestrictionPolicy.GetViolation(
+                wrapperType, Compiler.GenericUseSite.TypeReference);
+
+            Assert.That(violation, Does.Contain("List<T>"));
+        }
+
+        [Test]
+        public void GenericRestrictions_RejectListDerivedTypes()
+        {
+            CSharpCompilation compilation = CreateGenericRestrictionCompilation(@"
+using System.Collections.Generic;
+public class DerivedList : List<int> { }
+public class Sample { public DerivedList Values; }");
+            ITypeSymbol derivedListType = compilation.GetTypeByMetadataName("DerivedList");
+
+            string violation = Compiler.GenericRestrictionPolicy.GetViolation(
+                derivedListType, Compiler.GenericUseSite.TypeReference);
+
+            Assert.That(violation, Does.Contain("List<T>"));
+        }
+
+        [Test]
+        public void GenericRestrictions_RejectOpenGenericTypeReferences()
+        {
+            CSharpCompilation compilation = CreateGenericRestrictionCompilation(@"
+using System;
+public class Box<T> { }
+public class Sample { public Type GetTypeValue() => typeof(Box<>); }");
+            SyntaxNode unboundType = compilation.SyntaxTrees.Single().GetRoot()
+                .DescendantNodes().OfType<Microsoft.CodeAnalysis.CSharp.Syntax.TypeOfExpressionSyntax>()
+                .Single().Type;
+            ITypeSymbol type = compilation.GetSemanticModel(unboundType.SyntaxTree).GetTypeInfo(unboundType).Type;
+
+            string violation = Compiler.GenericRestrictionPolicy.GetViolation(
+                type, Compiler.GenericUseSite.TypeReference);
+
+            Assert.That(violation, Does.Contain("Open generic type"));
+        }
+
+        [Test]
+        public void GenericRestrictions_RejectGenericHeapObjectCreation()
+        {
+            CSharpCompilation compilation = CreateGenericRestrictionCompilation(@"
+public class Box<T> { }
+public class Sample { public object Create() => new Box<int>(); }");
+            INamedTypeSymbol type = compilation.GetTypeByMetadataName("Box`1").Construct(
+                compilation.GetSpecialType(SpecialType.System_Int32));
+
+            string violation = Compiler.GenericRestrictionPolicy.GetViolation(
+                type, Compiler.GenericUseSite.ObjectCreation);
+
+            Assert.That(violation, Does.Contain("generic heap objects"));
+        }
+
+        [Test]
+        public void GenericRestrictions_RejectGenericHeapObjectTypeReferences()
+        {
+            CSharpCompilation compilation = CreateGenericRestrictionCompilation(@"
+public class Box<T> { }
+public class Sample { public Box<int> Value; }");
+            ITypeSymbol type = compilation.GetTypeByMetadataName("Sample")
+                .GetMembers("Value").OfType<IFieldSymbol>().Single().Type;
+
+            string violation = Compiler.GenericRestrictionPolicy.GetViolation(
+                type, Compiler.GenericUseSite.TypeReference);
+
+            Assert.That(violation, Does.Contain("generic heap object types"));
+        }
+
+        [Test]
+        public void GenericRestrictions_RejectTypesDerivedFromGenericHeapObjects()
+        {
+            CSharpCompilation compilation = CreateGenericRestrictionCompilation(@"
+public class Box<T> { }
+public class IntBox : Box<int> { }");
+
+            string violation = Compiler.GenericRestrictionPolicy.GetViolation(
+                compilation.GetTypeByMetadataName("IntBox"), Compiler.GenericUseSite.TypeReference);
+
+            Assert.That(violation, Does.Contain("generic heap object types"));
+        }
+
+        [Test]
+        public void GenericRestrictions_PreserveCompilerOnlyTaskHandlesButRejectConstruction()
+        {
+            CSharpCompilation compilation = CreateGenericRestrictionCompilation("public class Sample { }");
+            INamedTypeSymbol taskType = compilation.GetTypeByMetadataName("System.Threading.Tasks.Task`1").Construct(
+                compilation.GetSpecialType(SpecialType.System_Int32));
+
+            Assert.That(Compiler.GenericRestrictionPolicy.GetViolation(
+                taskType, Compiler.GenericUseSite.TypeReference), Is.Null);
+            Assert.That(Compiler.GenericRestrictionPolicy.GetViolation(
+                taskType, Compiler.GenericUseSite.ObjectCreation), Does.Contain("generic heap objects"));
+        }
+
+        [Test]
+        public void GenericRestrictions_RejectOpenConstructedRuntimeTypes()
+        {
+            CSharpCompilation compilation = CreateGenericRestrictionCompilation(@"
+public static class Helpers<T> { }
+public class Sample<T> { public System.Type Get() => typeof(Helpers<T>); }");
+            SyntaxNode openType = compilation.SyntaxTrees.Single().GetRoot()
+                .DescendantNodes().OfType<Microsoft.CodeAnalysis.CSharp.Syntax.TypeOfExpressionSyntax>()
+                .Single().Type;
+            ITypeSymbol type = compilation.GetSemanticModel(openType.SyntaxTree).GetTypeInfo(openType).Type;
+
+            string violation = Compiler.GenericRestrictionPolicy.GetViolation(
+                type, Compiler.GenericUseSite.RuntimeType);
+
+            Assert.That(violation, Does.Contain("Open generic type"));
+        }
+
+        [Test]
+        public void GenericRestrictions_RejectGenericBehavioursWithoutRequiringProgramAsset()
+        {
+            CSharpCompilation compilation = CreateGenericRestrictionCompilation(@"
+namespace UdonSharp { public class UdonSharpBehaviour { } }
+public class GenericBehaviour<T> : UdonSharp.UdonSharpBehaviour { }");
+            INamedTypeSymbol type = compilation.GetTypeByMetadataName("GenericBehaviour`1");
+
+            string violation = Compiler.GenericRestrictionPolicy.GetViolation(
+                type, Compiler.GenericUseSite.BehaviourDeclaration);
+
+            Assert.That(violation, Does.Contain("Generic U# behaviour"));
+        }
+
+        [Test]
+        public void GenericRestrictions_AllowClosedInterfacesAndStaticGenericSpecialization()
+        {
+            CSharpCompilation compilation = CreateGenericRestrictionCompilation(@"
+public interface IValue<T> { T Get(); }
+public static class Helpers<T> { public static T Identity(T value) => value; }
+public class Sample : IValue<int> { public int Get() => Helpers<int>.Identity(1); }");
+            INamedTypeSymbol closedInterface = compilation.GetTypeByMetadataName("Sample").Interfaces.Single();
+            INamedTypeSymbol staticHelper = compilation.GetTypeByMetadataName("Helpers`1").Construct(
+                compilation.GetSpecialType(SpecialType.System_Int32));
+
+            Assert.That(Compiler.GenericRestrictionPolicy.GetViolation(
+                closedInterface, Compiler.GenericUseSite.TypeReference), Is.Null);
+            Assert.That(Compiler.GenericRestrictionPolicy.GetViolation(
+                staticHelper, Compiler.GenericUseSite.TypeReference), Is.Null);
+        }
+
+        [TestCase("public interface IContract { const int Value = 1; }")]
+        [TestCase("public interface IContract { class Nested { } }")]
+        public void GenericRestrictions_RejectUnsupportedInterfaceMembers(string source)
+        {
+            CSharpCompilation compilation = CreateGenericRestrictionCompilation(source);
+            ISymbol member = compilation.GetTypeByMetadataName("IContract").GetMembers().Single();
+
+            string violation = Compiler.GenericRestrictionPolicy.GetUnsupportedInterfaceMemberViolation(member);
+
+            Assert.That(violation, Does.Contain("not supported"));
+        }
+
+        [Test]
+        public void GenericRestrictions_MultipleConcreteBasesRemainRoslynBuildError()
+        {
+            CSharpCompilation compilation = CreateGenericRestrictionCompilation(@"
+public class First { }
+public class Second { }
+public class Invalid : First, Second { }");
+
+            Assert.That(compilation.GetDiagnostics().Select(diagnostic => diagnostic.Id), Does.Contain("CS1721"));
+        }
+
+        private static CSharpCompilation CreateGenericRestrictionCompilation(string source)
+        {
+            SyntaxTree tree = CSharpSyntaxTree.ParseText(source);
+            return CSharpCompilation.Create("GenericRestrictionTest", new[] { tree },
+                new[] { MetadataReference.CreateFromFile(typeof(object).Assembly.Location) },
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        }
     }
 }

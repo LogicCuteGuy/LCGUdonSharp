@@ -162,21 +162,9 @@ namespace UdonSharp.Compiler.Symbols
 
                 foreach (ISymbol member in interfaceType.GetMembers())
                 {
-                    switch (member)
-                    {
-                        case IEventSymbol eventSymbol:
-                            throw new CompilerException($"U# interface events are not supported: '{eventSymbol}'", eventSymbol.Locations.FirstOrDefault());
-                        case IPropertySymbol propertySymbol when propertySymbol.IsIndexer:
-                            throw new CompilerException($"U# interface indexers are not supported: '{propertySymbol}'", propertySymbol.Locations.FirstOrDefault());
-                        case IPropertySymbol propertySymbol when propertySymbol.IsStatic:
-                            throw new CompilerException($"U# interface static properties are not supported: '{propertySymbol}'", propertySymbol.Locations.FirstOrDefault());
-                        case IMethodSymbol methodSymbol when methodSymbol.IsStatic:
-                            throw new CompilerException($"U# interface static methods are not supported: '{methodSymbol}'", methodSymbol.Locations.FirstOrDefault());
-                        case IMethodSymbol methodSymbol when methodSymbol.IsGenericMethod:
-                            throw new CompilerException($"U# interface generic methods are not supported: '{methodSymbol}'", methodSymbol.Locations.FirstOrDefault());
-                        case IMethodSymbol methodSymbol when !methodSymbol.IsAbstract:
-                            throw new CompilerException($"U# default interface methods are not supported: '{methodSymbol}'", methodSymbol.Locations.FirstOrDefault());
-                    }
+                    string violation = GenericRestrictionPolicy.GetUnsupportedInterfaceMemberViolation(member);
+                    if (violation != null)
+                        throw new CompilerException(violation, member.Locations.FirstOrDefault());
                 }
             }
 

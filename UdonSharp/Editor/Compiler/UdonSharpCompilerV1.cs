@@ -494,6 +494,24 @@ namespace UdonSharp.Compiler
             foreach (ModuleBinding tree in syntaxTrees)
                 tree.semanticModel = compilation.GetSemanticModel(tree.tree);
 
+            foreach (ModuleBinding module in syntaxTrees)
+            {
+                SemanticModel model = module.semanticModel;
+                foreach (ClassDeclarationSyntax classDecl in module.tree.GetRoot().DescendantNodes().OfType<ClassDeclarationSyntax>())
+                {
+                    if (!(model.GetDeclaredSymbol(classDecl) is INamedTypeSymbol classType) ||
+                        !classType.IsUdonSharpBehaviour())
+                        continue;
+
+                    string violation = GenericRestrictionPolicy.GetViolation(classType, GenericUseSite.BehaviourDeclaration);
+                    if (violation != null)
+                        compilationContext.AddDiagnostic(DiagnosticSeverity.Error, classDecl, violation);
+                }
+            }
+
+            if (compilationContext.ErrorCount > 0)
+                return;
+
             ConcurrentBag<(INamedTypeSymbol, ModuleBinding)> rootUdonSharpTypes = new ConcurrentBag<(INamedTypeSymbol, ModuleBinding)>();
             HashSet<INamedTypeSymbol> typesWithAssociatedProgramAssets = new HashSet<INamedTypeSymbol>();
             object programTypesLock = new object();
@@ -530,14 +548,9 @@ namespace UdonSharp.Compiler
                                 return;
                             }
                             
-                            if (classType.IsGenericType)
-                            {
-                                compilationContext.AddDiagnostic(DiagnosticSeverity.Error, classType.DeclaringSyntaxReferences.First().GetSyntax(), "Generic U# behaviours cannot have an associated U# program asset");
-                                return;
-                            }
                         }
                         
-                        if (classType.IsAbstract || classType.IsGenericType)
+                        if (classType.IsAbstract)
                             continue;
 
                         // If there are multiple UdonSharpBehaviours declared in the same behaviour, they need to be partial classes of the same class

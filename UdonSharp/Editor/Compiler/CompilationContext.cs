@@ -8,6 +8,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Runtime.CompilerServices;
 using UdonSharp.Compiler.Assembly;
 using UdonSharp.Compiler.Binder;
 using UdonSharp.Compiler.Symbols;
@@ -18,6 +19,8 @@ using UnityEditor;
 using UnityEditor.Compilation;
 using UnityEngine;
 using VRC.SDK3.UdonNetworkCalling;
+
+[assembly: InternalsVisibleTo("LogicCuteGuy.LCGUdonSharp.Installer.Editor.Tests")]
 
 namespace UdonSharp.Compiler
 {
