@@ -371,6 +371,104 @@ public class Derived : Base
         }
 
         [Test]
+        public void AsyncLowering_WrapsStringCallbacksAfterLegacyBody()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System.Threading.Tasks;
+namespace VRC.SDKBase { public class VRCUrl { public string Get() => ""; } }
+namespace VRC.Udon.Common.Interfaces { public interface IUdonEventReceiver { } }
+namespace VRC.SDK3.StringLoading
+{
+    public interface IVRCStringDownload { VRC.SDKBase.VRCUrl Url { get; } }
+    public static class VRCStringDownloader
+    {
+        public static void LoadUrl(VRC.SDKBase.VRCUrl url, VRC.Udon.Common.Interfaces.IUdonEventReceiver receiver) { }
+    }
+}
+namespace UdonSharp
+{
+    public static class VRCAsync
+    {
+        public static Task<VRC.SDK3.StringLoading.IVRCStringDownload> LoadStringAsync(VRC.SDKBase.VRCUrl url) => null;
+    }
+}
+public class Sample : VRC.Udon.Common.Interfaces.IUdonEventReceiver
+{
+    private VRC.SDKBase.VRCUrl url;
+    public async void Run()
+    {
+        await UdonSharp.VRCAsync.LoadStringAsync(url);
+        Continued();
+    }
+    public void OnStringLoadSuccess(VRC.SDK3.StringLoading.IVRCStringDownload result) { Legacy(); }
+    public void OnStringLoadError(VRC.SDK3.StringLoading.IVRCStringDownload result) { Legacy(); }
+    private void Legacy() { }
+    private void Continued() { }
+}");
+
+            Compiler.Lowering.AsyncSyntaxLoweringResult result = RewriteAsyncWithSemantics(source);
+            string lowered = result.Tree.GetRoot().ToFullString();
+            Assert.That(result.Diagnostics, Is.Empty);
+            Assert.That(lowered, Does.Contain("VRCStringDownloader.LoadUrl"));
+            Assert.That(lowered, Does.Contain("result.Url.Get() == __uasync_"));
+            Assert.That(lowered.IndexOf("Legacy();", StringComparison.Ordinal),
+                Is.LessThan(lowered.LastIndexOf("_resume();", StringComparison.Ordinal)));
+            Assert.That(lowered, Does.Not.Contain("await UdonSharp.VRCAsync"));
+        }
+
+        [Test]
+        public void AsyncLowering_WrapsImageCallbacksAndMatchesRequestIdentity()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System.Threading.Tasks;
+namespace UnityEngine { public class Material { } }
+namespace VRC.SDKBase { public class VRCUrl { } }
+namespace VRC.Udon.Common.Interfaces { public interface IUdonEventReceiver { } }
+namespace VRC.SDK3.Image
+{
+    public class TextureInfo { }
+    public interface IVRCImageDownload { }
+    public class VRCImageDownloader
+    {
+        public IVRCImageDownload DownloadImage(VRC.SDKBase.VRCUrl url, UnityEngine.Material material,
+            VRC.Udon.Common.Interfaces.IUdonEventReceiver receiver, TextureInfo textureInfo) => null;
+    }
+}
+namespace UdonSharp
+{
+    public static class VRCAsync
+    {
+        public static Task<VRC.SDK3.Image.IVRCImageDownload> LoadImageAsync(
+            VRC.SDK3.Image.VRCImageDownloader downloader, VRC.SDKBase.VRCUrl url,
+            UnityEngine.Material material = null, VRC.SDK3.Image.TextureInfo textureInfo = null) => null;
+    }
+}
+public class Sample : VRC.Udon.Common.Interfaces.IUdonEventReceiver
+{
+    private VRC.SDK3.Image.VRCImageDownloader downloader;
+    private VRC.SDKBase.VRCUrl url;
+    public async void Run()
+    {
+        await UdonSharp.VRCAsync.LoadImageAsync(downloader, url);
+        Continued();
+    }
+    public void OnImageLoadSuccess(VRC.SDK3.Image.IVRCImageDownload result) { Legacy(); }
+    public void OnImageLoadError(VRC.SDK3.Image.IVRCImageDownload result) { Legacy(); }
+    private void Legacy() { }
+    private void Continued() { }
+}");
+
+            Compiler.Lowering.AsyncSyntaxLoweringResult result = RewriteAsyncWithSemantics(source);
+            string lowered = result.Tree.GetRoot().ToFullString();
+            Assert.That(result.Diagnostics, Is.Empty);
+            Assert.That(lowered, Does.Contain("DownloadImage"));
+            Assert.That(lowered, Does.Contain("result == __uasync_"));
+            Assert.That(lowered.IndexOf("Legacy();", StringComparison.Ordinal),
+                Is.LessThan(lowered.LastIndexOf("_resume();", StringComparison.Ordinal)));
+            Assert.That(lowered, Does.Not.Contain("await UdonSharp.VRCAsync"));
+        }
+
+        [Test]
         public void ExtendedSyntaxLowering_LowersConcreteDynamicLocals()
         {
             SyntaxTree source = CSharpSyntaxTree.ParseText(@"

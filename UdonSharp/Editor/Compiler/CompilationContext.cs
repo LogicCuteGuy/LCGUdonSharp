@@ -1629,6 +1629,31 @@ namespace UdonSharp.Compiler.Lowering
 
         private sealed class AsyncMethodRewriter : CSharpSyntaxRewriter
         {
+            private enum AwaitKind
+            {
+                Yield,
+                Delay,
+                StringLoad,
+                ImageLoad,
+            }
+
+            private sealed class AwaitLowering
+            {
+                internal AwaitKind Kind;
+                internal ExpressionSyntax DelayMilliseconds;
+                internal InvocationExpressionSyntax Invocation;
+            }
+
+            private sealed class SdkAwaitDispatch
+            {
+                internal AwaitKind Kind;
+                internal string StateName;
+                internal string ResumeName;
+                internal int ExpectedState;
+                internal string PendingFieldName;
+                internal FieldDeclarationSyntax PendingField;
+            }
+
             private readonly Func<ClassDeclarationSyntax, bool> _shouldRewriteClass;
             private readonly SemanticModel _semanticModel;
 
@@ -1650,6 +1675,7 @@ namespace UdonSharp.Compiler.Lowering
                     return visited;
 
                 var members = new List<MemberDeclarationSyntax>();
+                var sdkDispatches = new List<SdkAwaitDispatch>();
                 var reservedNames = new HashSet<string>(visited.Members.SelectMany(GetDeclaredMemberNames),
                     StringComparer.Ordinal);
 
@@ -1664,7 +1690,7 @@ namespace UdonSharp.Compiler.Lowering
                     }
 
                     MethodDeclarationSyntax semanticMethod = node.Members[memberIndex] as MethodDeclarationSyntax;
-                    if (!TryRewriteMethod(method, semanticMethod, reservedNames,
+                    if (!TryRewriteMethod(method, semanticMethod, reservedNames, sdkDispatches,
                             out MethodDeclarationSyntax entryMethod,
                             out FieldDeclarationSyntax stateField, out MethodDeclarationSyntax resumeMethod))
                     {
@@ -1683,11 +1709,20 @@ namespace UdonSharp.Compiler.Lowering
                     }
                 }
 
+                foreach (SdkAwaitDispatch dispatch in sdkDispatches)
+                {
+                    reservedNames.Add(dispatch.PendingFieldName);
+                    members.Add(dispatch.PendingField);
+                }
+
+                WeaveSdkCallbacks(members, sdkDispatches);
+
                 return visited.WithMembers(SyntaxFactory.List(members));
             }
 
             private bool TryRewriteMethod(MethodDeclarationSyntax method,
                 MethodDeclarationSyntax semanticMethod, HashSet<string> reservedNames,
+                List<SdkAwaitDispatch> sdkDispatches,
                 out MethodDeclarationSyntax entryMethod, out FieldDeclarationSyntax stateField,
                 out MethodDeclarationSyntax resumeMethod)
             {
@@ -1760,7 +1795,8 @@ namespace UdonSharp.Compiler.Lowering
                 }
 
                 var segments = new List<List<StatementSyntax>> { new List<StatementSyntax>() };
-                var awaitKinds = new List<(bool IsDelay, ExpressionSyntax DelayMilliseconds)>();
+                var awaitKinds = new List<AwaitLowering>();
+                int sdkAwaitCount = 0;
                 foreach (StatementSyntax statement in method.Body.Statements)
                 {
                     if (!(statement is ExpressionStatementSyntax expressionStatement) ||
@@ -1770,12 +1806,20 @@ namespace UdonSharp.Compiler.Lowering
                         continue;
                     }
 
-                    if (!TryClassifyAwait(awaitExpression.Expression, out bool isDelay,
-                            out ExpressionSyntax delayMilliseconds))
+                    if (!TryClassifyAwait(awaitExpression.Expression, out AwaitLowering awaitLowering))
                         return Fail(awaitExpression,
-                            "Only Task.Yield() and Task.Delay(positive constant milliseconds) can currently be awaited in Udon.");
+                            "Only Task.Yield(), Task.Delay(positive constant milliseconds), VRCAsync.LoadStringAsync(), and VRCAsync.LoadImageAsync() can currently be awaited in Udon.");
 
-                    awaitKinds.Add((isDelay, delayMilliseconds));
+                    if (awaitLowering.Kind == AwaitKind.StringLoad ||
+                        awaitLowering.Kind == AwaitKind.ImageLoad)
+                    {
+                        if (sdkDispatches.Count + sdkAwaitCount > 0)
+                            return Fail(awaitExpression,
+                                "Only one pending VRChat SDK await is supported per behaviour in this callback-lowering slice.");
+                        sdkAwaitCount++;
+                    }
+
+                    awaitKinds.Add(awaitLowering);
                     segments.Add(new List<StatementSyntax>());
                 }
 
@@ -1784,8 +1828,12 @@ namespace UdonSharp.Compiler.Lowering
                     SyntaxFactory.ParseStatement($"if ({stateName} != 0) return;"),
                     SyntaxFactory.ParseStatement($"{stateName} = -1;")
                 };
+                var methodReservedNames = new HashSet<string>(reservedNames, StringComparer.Ordinal);
+                var methodSdkDispatches = new List<SdkAwaitDispatch>();
                 entryStatements.AddRange(segments[0]);
-                AppendSchedule(entryStatements, stateName, resumeName, 1, awaitKinds[0]);
+                if (!AppendSchedule(entryStatements, stateName, resumeName, 1,
+                        awaitKinds[0], methodReservedNames, methodSdkDispatches))
+                    return false;
                 entryMethod = method.WithModifiers(modifiers)
                     .WithBody(SyntaxFactory.Block(entryStatements));
 
@@ -1794,7 +1842,11 @@ namespace UdonSharp.Compiler.Lowering
                 {
                     var statements = new List<StatementSyntax>(segments[i]);
                     if (i < segments.Count - 1)
-                        AppendSchedule(statements, stateName, resumeName, i + 1, awaitKinds[i]);
+                    {
+                        if (!AppendSchedule(statements, stateName, resumeName, i + 1,
+                                awaitKinds[i], methodReservedNames, methodSdkDispatches))
+                            return false;
+                    }
                     else
                     {
                         statements.Add(SyntaxFactory.ParseStatement($"{stateName} = 0;"));
@@ -1814,44 +1866,127 @@ namespace UdonSharp.Compiler.Lowering
                     .WithBody(SyntaxFactory.Block(
                         SyntaxFactory.SwitchStatement(SyntaxFactory.IdentifierName(stateName))
                             .WithSections(SyntaxFactory.List(sections))));
+                foreach (SdkAwaitDispatch dispatch in methodSdkDispatches)
+                {
+                    reservedNames.Add(dispatch.PendingFieldName);
+                    sdkDispatches.Add(dispatch);
+                }
                 return true;
             }
 
-            private static void AppendSchedule(List<StatementSyntax> statements, string stateName,
-                string resumeName, int nextState, (bool IsDelay, ExpressionSyntax DelayMilliseconds) awaitKind)
+            private bool AppendSchedule(List<StatementSyntax> statements, string stateName,
+                string resumeName, int nextState, AwaitLowering awaitLowering,
+                HashSet<string> reservedNames, List<SdkAwaitDispatch> sdkDispatches)
             {
-                statements.Add(SyntaxFactory.ParseStatement($"{stateName} = {nextState};"));
-                string schedule = awaitKind.IsDelay
-                    ? $"SendCustomEventDelayedSeconds(nameof({resumeName}), ((float)({awaitKind.DelayMilliseconds})) / 1000f);"
-                    : $"SendCustomEventDelayedFrames(nameof({resumeName}), 1);";
-                statements.Add(SyntaxFactory.ParseStatement(schedule));
+                if (awaitLowering.Kind == AwaitKind.Yield || awaitLowering.Kind == AwaitKind.Delay)
+                {
+                    statements.Add(SyntaxFactory.ParseStatement($"{stateName} = {nextState};"));
+                    string schedule = awaitLowering.Kind == AwaitKind.Delay
+                        ? $"SendCustomEventDelayedSeconds(nameof({resumeName}), ((float)({awaitLowering.DelayMilliseconds})) / 1000f);"
+                        : $"SendCustomEventDelayedFrames(nameof({resumeName}), 1);";
+                    statements.Add(SyntaxFactory.ParseStatement(schedule));
+                    statements.Add(SyntaxFactory.ParseStatement("return;"));
+                    return true;
+                }
+
+                string pendingFieldName = $"{stateName}_{(awaitLowering.Kind == AwaitKind.StringLoad ? "stringUrl" : "imageRequest")}";
+                if (reservedNames.Contains(pendingFieldName))
+                    return Fail(awaitLowering.Invocation,
+                        $"SDK await conflicts with compiler-generated member '{pendingFieldName}'.");
+
+                FieldDeclarationSyntax pendingField;
+                if (awaitLowering.Kind == AwaitKind.StringLoad)
+                {
+                    ExpressionSyntax url = GetArgument(awaitLowering.Invocation, "url", 0);
+                    if (url == null)
+                        return Fail(awaitLowering.Invocation, "LoadStringAsync requires a URL argument.");
+                    pendingField = (FieldDeclarationSyntax)SyntaxFactory.ParseMemberDeclaration(
+                        $"[System.NonSerialized] private VRC.SDKBase.VRCUrl {pendingFieldName};");
+                    statements.Add(SyntaxFactory.ParseStatement($"{pendingFieldName} = {url};"));
+                    statements.Add(SyntaxFactory.ParseStatement($"{stateName} = {nextState};"));
+                    statements.Add(SyntaxFactory.ParseStatement(
+                        $"VRC.SDK3.StringLoading.VRCStringDownloader.LoadUrl({pendingFieldName}, " +
+                        "(VRC.Udon.Common.Interfaces.IUdonEventReceiver)this);"));
+                }
+                else
+                {
+                    ExpressionSyntax downloader = GetArgument(awaitLowering.Invocation,
+                        "downloader", 0);
+                    ExpressionSyntax url = GetArgument(awaitLowering.Invocation, "url", 1);
+                    ExpressionSyntax material = GetArgument(awaitLowering.Invocation,
+                        "material", 2) ?? SyntaxFactory.LiteralExpression(SyntaxKind.NullLiteralExpression);
+                    ExpressionSyntax textureInfo = GetArgument(awaitLowering.Invocation,
+                        "textureInfo", 3) ?? SyntaxFactory.LiteralExpression(SyntaxKind.NullLiteralExpression);
+                    if (downloader == null || url == null)
+                        return Fail(awaitLowering.Invocation,
+                            "LoadImageAsync requires downloader and URL arguments.");
+                    pendingField = (FieldDeclarationSyntax)SyntaxFactory.ParseMemberDeclaration(
+                        $"[System.NonSerialized] private VRC.SDK3.Image.IVRCImageDownload {pendingFieldName};");
+                    statements.Add(SyntaxFactory.ParseStatement($"{stateName} = {nextState};"));
+                    statements.Add(SyntaxFactory.ParseStatement(
+                        $"{pendingFieldName} = ({downloader}).DownloadImage({url}, {material}, " +
+                        $"(VRC.Udon.Common.Interfaces.IUdonEventReceiver)this, {textureInfo});"));
+                }
+
                 statements.Add(SyntaxFactory.ParseStatement("return;"));
+                reservedNames.Add(pendingFieldName);
+                sdkDispatches.Add(new SdkAwaitDispatch
+                {
+                    Kind = awaitLowering.Kind,
+                    StateName = stateName,
+                    ResumeName = resumeName,
+                    ExpectedState = nextState,
+                    PendingFieldName = pendingFieldName,
+                    PendingField = pendingField,
+                });
+                return true;
             }
 
-            private bool TryClassifyAwait(ExpressionSyntax expression, out bool isDelay,
-                out ExpressionSyntax delayMilliseconds)
+            private bool TryClassifyAwait(ExpressionSyntax expression, out AwaitLowering awaitLowering)
             {
-                isDelay = false;
-                delayMilliseconds = null;
+                awaitLowering = null;
                 if (!(expression is InvocationExpressionSyntax invocation))
                     return false;
 
                 if (_semanticModel != null)
                 {
-                    if (!(_semanticModel.GetSymbolInfo(invocation).Symbol is IMethodSymbol method) ||
-                        method.ContainingType?.ToDisplayString() != "System.Threading.Tasks.Task")
+                    if (!(_semanticModel.GetSymbolInfo(invocation).Symbol is IMethodSymbol method))
                         return false;
-                    if (method.Name == "Yield" && method.Parameters.Length == 0)
+
+                    string containingType = method.ContainingType?.ToDisplayString();
+                    if (containingType == "System.Threading.Tasks.Task" &&
+                        method.Name == "Yield" && method.Parameters.Length == 0)
+                    {
+                        awaitLowering = new AwaitLowering { Kind = AwaitKind.Yield, Invocation = invocation };
                         return true;
-                    if (method.Name == "Delay" && method.Parameters.Length == 1 &&
+                    }
+                    if (containingType == "System.Threading.Tasks.Task" &&
+                        method.Name == "Delay" && method.Parameters.Length == 1 &&
                         method.Parameters[0].Type.SpecialType == SpecialType.System_Int32)
                     {
                         Optional<object> constant = _semanticModel.GetConstantValue(
                             invocation.ArgumentList.Arguments[0].Expression);
                         if (!constant.HasValue || !(constant.Value is int milliseconds) || milliseconds <= 0)
                             return false;
-                        isDelay = true;
-                        delayMilliseconds = invocation.ArgumentList.Arguments[0].Expression;
+                        awaitLowering = new AwaitLowering
+                        {
+                            Kind = AwaitKind.Delay,
+                            DelayMilliseconds = invocation.ArgumentList.Arguments[0].Expression,
+                            Invocation = invocation,
+                        };
+                        return true;
+                    }
+
+                    if (containingType == "UdonSharp.VRCAsync" && method.Name == "LoadStringAsync")
+                    {
+                        awaitLowering = new AwaitLowering
+                            { Kind = AwaitKind.StringLoad, Invocation = invocation };
+                        return true;
+                    }
+                    if (containingType == "UdonSharp.VRCAsync" && method.Name == "LoadImageAsync")
+                    {
+                        awaitLowering = new AwaitLowering
+                            { Kind = AwaitKind.ImageLoad, Invocation = invocation };
                         return true;
                     }
 
@@ -1861,16 +1996,120 @@ namespace UdonSharp.Compiler.Lowering
                 string methodName = invocation.Expression.ToString();
                 if ((methodName == "Task.Yield" || methodName == "System.Threading.Tasks.Task.Yield") &&
                     invocation.ArgumentList.Arguments.Count == 0)
+                {
+                    awaitLowering = new AwaitLowering { Kind = AwaitKind.Yield, Invocation = invocation };
                     return true;
+                }
                 if ((methodName == "Task.Delay" || methodName == "System.Threading.Tasks.Task.Delay") &&
                     invocation.ArgumentList.Arguments.Count == 1)
                 {
-                    isDelay = true;
-                    delayMilliseconds = invocation.ArgumentList.Arguments[0].Expression;
+                    awaitLowering = new AwaitLowering
+                    {
+                        Kind = AwaitKind.Delay,
+                        DelayMilliseconds = invocation.ArgumentList.Arguments[0].Expression,
+                        Invocation = invocation,
+                    };
                     return true;
                 }
 
                 return false;
+            }
+
+            private static ExpressionSyntax GetArgument(InvocationExpressionSyntax invocation,
+                string parameterName, int positionalIndex)
+            {
+                foreach (ArgumentSyntax argument in invocation.ArgumentList.Arguments)
+                {
+                    if (argument.NameColon?.Name.Identifier.ValueText == parameterName)
+                        return argument.Expression;
+                }
+
+                if (positionalIndex < invocation.ArgumentList.Arguments.Count &&
+                    invocation.ArgumentList.Arguments[positionalIndex].NameColon == null)
+                    return invocation.ArgumentList.Arguments[positionalIndex].Expression;
+
+                return null;
+            }
+
+            private void WeaveSdkCallbacks(List<MemberDeclarationSyntax> members,
+                List<SdkAwaitDispatch> dispatches)
+            {
+                foreach (SdkAwaitDispatch dispatch in dispatches)
+                {
+                    string[] callbackNames = dispatch.Kind == AwaitKind.StringLoad
+                        ? new[] { "OnStringLoadSuccess", "OnStringLoadError" }
+                        : new[] { "OnImageLoadSuccess", "OnImageLoadError" };
+                    string parameterType = dispatch.Kind == AwaitKind.StringLoad
+                        ? "VRC.SDK3.StringLoading.IVRCStringDownload"
+                        : "VRC.SDK3.Image.IVRCImageDownload";
+
+                    foreach (string callbackName in callbackNames)
+                    {
+                        int existingIndex = members.FindIndex(member =>
+                            member is MethodDeclarationSyntax method &&
+                            method.Identifier.ValueText == callbackName);
+                        string parameterName = "result";
+                        StatementSyntax dispatchStatement;
+                        if (existingIndex >= 0)
+                        {
+                            var existing = (MethodDeclarationSyntax)members[existingIndex];
+                            if (existing.ParameterList.Parameters.Count != 1)
+                            {
+                                Diagnostics.Add(new AsyncSyntaxLoweringDiagnostic(existing,
+                                    $"Legacy callback '{callbackName}' must have exactly one SDK result parameter."));
+                                continue;
+                            }
+
+                            parameterName = existing.ParameterList.Parameters[0].Identifier.ValueText;
+                            dispatchStatement = CreateSdkDispatchStatement(dispatch, parameterName);
+                            BlockSyntax body = existing.Body;
+                            if (body == null && existing.ExpressionBody != null)
+                                body = SyntaxFactory.Block(SyntaxFactory.ExpressionStatement(
+                                    existing.ExpressionBody.Expression));
+                            if (body == null)
+                            {
+                                Diagnostics.Add(new AsyncSyntaxLoweringDiagnostic(existing,
+                                    $"Legacy callback '{callbackName}' must have a method body."));
+                                continue;
+                            }
+                            if (body.DescendantNodes().OfType<ReturnStatementSyntax>().Any())
+                            {
+                                Diagnostics.Add(new AsyncSyntaxLoweringDiagnostic(existing,
+                                    $"Legacy callback '{callbackName}' cannot return early when it dispatches an SDK await continuation."));
+                                continue;
+                            }
+
+                            members[existingIndex] = existing.WithExpressionBody(null)
+                                .WithSemicolonToken(default)
+                                .WithBody(body.AddStatements(dispatchStatement));
+                        }
+                        else
+                        {
+                            dispatchStatement = CreateSdkDispatchStatement(dispatch, parameterName);
+                            var generated = SyntaxFactory.MethodDeclaration(
+                                    SyntaxFactory.ParseTypeName("void"), callbackName)
+                                .AddModifiers(SyntaxFactory.Token(SyntaxKind.PublicKeyword),
+                                    SyntaxFactory.Token(SyntaxKind.OverrideKeyword))
+                                .WithParameterList(SyntaxFactory.ParameterList(
+                                    SyntaxFactory.SingletonSeparatedList(
+                                        SyntaxFactory.Parameter(SyntaxFactory.Identifier(parameterName))
+                                            .WithType(SyntaxFactory.ParseTypeName(parameterType)))))
+                                .WithBody(SyntaxFactory.Block(dispatchStatement));
+                            members.Add(generated);
+                        }
+                    }
+                }
+            }
+
+            private static StatementSyntax CreateSdkDispatchStatement(SdkAwaitDispatch dispatch,
+                string parameterName)
+            {
+                string match = dispatch.Kind == AwaitKind.StringLoad
+                    ? $"{parameterName}.Url.Get() == {dispatch.PendingFieldName}.Get()"
+                    : $"{parameterName} == {dispatch.PendingFieldName}";
+                return SyntaxFactory.ParseStatement(
+                    $"if ({dispatch.StateName} == {dispatch.ExpectedState} && {match}) " +
+                    $"{{ {dispatch.PendingFieldName} = null; {dispatch.ResumeName}(); }}");
             }
 
             private static ulong GetStableTypeHash(INamedTypeSymbol type)

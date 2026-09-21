@@ -24,6 +24,12 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer.Tests
         private const string AsyncExampleScriptPath =
             "Packages/com.logiccuteguy.lcgudonsharp/Example/AsyncAwait/AsyncYieldDelayExample.cs";
 
+        private static readonly string[] AsyncSdkExampleScriptPaths =
+        {
+            "Packages/com.logiccuteguy.lcgudonsharp/Example/AsyncAwait/AsyncStringDownloadExample.cs",
+            "Packages/com.logiccuteguy.lcgudonsharp/Example/AsyncAwait/AsyncImageDownloadExample.cs",
+        };
+
         private static readonly string[] ExtendedLanguageExamplePaths =
         {
             "Packages/com.logiccuteguy.lcgudonsharp/Example/ExtendedLanguage/RefOutExample.cs",
@@ -120,6 +126,38 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer.Tests
             Assert.That(assembly, Does.Contain("_Interact_resume"));
             Assert.That(assembly, Does.Contain("SendCustomEventDelayedFrames"));
             Assert.That(assembly, Does.Contain("SendCustomEventDelayedSeconds"));
+        }
+
+        [Test]
+        public void AsyncSdkExamples_CompileIntoLegacyCallbacksAndAwaitContinuations()
+        {
+            UdonSharpCompilerV1.CompileSync(new UdonSharpCompileOptions { IsEditorBuild = true });
+            LogAssert.NoUnexpectedReceived();
+            Assert.That(UdonSharp.UdonSharpProgramAsset.AnyUdonSharpScriptHasError(), Is.False);
+
+            var cacheType = typeof(UdonSharpEditorUtility).Assembly.GetType("UdonSharp.UdonSharpEditorCache");
+            object cache = cacheType.GetProperty("Instance", BindingFlags.Public | BindingFlags.Static)
+                .GetValue(null);
+            MethodInfo getUasm = cacheType.GetMethod("GetUASMStr");
+
+            foreach (string scriptPath in AsyncSdkExampleScriptPaths)
+            {
+                MonoScript script = AssetDatabase.LoadAssetAtPath<MonoScript>(scriptPath);
+                Assert.That(script, Is.Not.Null, scriptPath + " was not imported by Unity.");
+
+                string programAssetPath = Path.ChangeExtension(scriptPath, ".asset");
+                var programAsset = AssetDatabase.LoadAssetAtPath<UdonSharp.UdonSharpProgramAsset>(programAssetPath);
+                Assert.That(programAsset, Is.Not.Null, programAssetPath + " is missing.");
+                Assert.That(programAsset.sourceCsScript, Is.SameAs(script));
+
+                string assembly = (string)getUasm.Invoke(cache, new object[] { programAsset });
+                Assert.That(assembly, Does.Contain("_interact"));
+                Assert.That(assembly, Does.Contain("_Interact_resume"));
+                Assert.That(assembly, Does.Contain(scriptPath.Contains("String") ? "LoadUrl" : "DownloadImage"));
+                Assert.That(assembly, Does.Contain(scriptPath.Contains("String")
+                    ? "_onStringLoadSuccess"
+                    : "_onImageLoadSuccess"));
+            }
         }
 
         [Test]
