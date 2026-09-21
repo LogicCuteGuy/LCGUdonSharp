@@ -29,6 +29,64 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer.Tests
             "Packages/com.logiccuteguy.lcgudonsharp/Example/LCGZoneObjectShowcase.cs",
         };
 
+        private static readonly string[] GenericRestrictionScriptPaths =
+        {
+            "Packages/com.logiccuteguy.lcgudonsharp/Example/GenericRestrictions/OpenGenericsExample.cs",
+            "Packages/com.logiccuteguy.lcgudonsharp/Example/GenericRestrictions/GenericBehavioursExample.cs",
+            "Packages/com.logiccuteguy.lcgudonsharp/Example/GenericRestrictions/GenericHeapObjectsExample.cs",
+            "Packages/com.logiccuteguy.lcgudonsharp/Example/GenericRestrictions/ListTypesExample.cs",
+            "Packages/com.logiccuteguy.lcgudonsharp/Example/GenericRestrictions/InterfaceMembersExample.cs",
+            "Packages/com.logiccuteguy.lcgudonsharp/Example/GenericRestrictions/MultipleConcreteBasesExample.cs",
+        };
+
+        [Test]
+        public void GenericRestrictionExamples_AreConcreteUdonSharpScripts()
+        {
+            string guide = File.ReadAllText(GenericRestrictionsGuidePath);
+
+            foreach (string scriptPath in GenericRestrictionScriptPaths)
+            {
+                Assert.That(File.Exists(scriptPath), Is.True, scriptPath + " is missing.");
+                string resolvedAssembly = CompilationPipeline.GetAssemblyNameFromScriptPath(scriptPath);
+                Assert.That(Path.GetFileNameWithoutExtension(resolvedAssembly), Is.EqualTo(ExpectedAssemblyName));
+
+                MonoScript script = AssetDatabase.LoadAssetAtPath<MonoScript>(scriptPath);
+                Assert.That(script, Is.Not.Null, scriptPath + " was not imported by Unity.");
+                Assert.That(typeof(UdonSharp.UdonSharpBehaviour).IsAssignableFrom(script.GetClass()), Is.True,
+                    scriptPath + " is not a concrete UdonSharpBehaviour.");
+
+                string programAssetPath = Path.ChangeExtension(scriptPath, ".asset");
+                var programAsset = AssetDatabase.LoadAssetAtPath<UdonSharp.UdonSharpProgramAsset>(programAssetPath);
+                Assert.That(programAsset, Is.Not.Null, programAssetPath + " is missing.");
+                Assert.That(programAsset.sourceCsScript, Is.SameAs(script),
+                    programAssetPath + " points to the wrong source script.");
+                Assert.That(guide, Does.Contain(Path.GetFileName(scriptPath)),
+                    scriptPath + " is not linked from the guide.");
+            }
+        }
+
+        [Test]
+        public void GenericRestrictionExamples_CompileThroughUdonSharp()
+        {
+            UdonSharpCompilerV1.CompileSync(new UdonSharpCompileOptions { IsEditorBuild = true });
+            LogAssert.NoUnexpectedReceived();
+            Assert.That(UdonSharp.UdonSharpProgramAsset.AnyUdonSharpScriptHasError(), Is.False);
+
+            var cacheType = typeof(UdonSharpEditorUtility).Assembly.GetType("UdonSharp.UdonSharpEditorCache");
+            object cache = cacheType.GetProperty("Instance", BindingFlags.Public | BindingFlags.Static).GetValue(null);
+            MethodInfo getUasm = cacheType.GetMethod("GetUASMStr");
+
+            foreach (string scriptPath in GenericRestrictionScriptPaths)
+            {
+                string programAssetPath = Path.ChangeExtension(scriptPath, ".asset");
+                var programAsset = AssetDatabase.LoadAssetAtPath<UdonSharp.UdonSharpProgramAsset>(programAssetPath);
+                string assembly = (string)getUasm.Invoke(cache, new object[] { programAsset });
+                Assert.That(assembly, Is.Not.Empty, programAssetPath + " emitted no UASM.");
+                Assert.That(assembly, Does.Contain("_interact"),
+                    programAssetPath + " did not emit its Interact entry point.");
+            }
+        }
+
         [Test]
         public void GenericRestrictionsGuide_HasEverySectionAndBadGoodPair()
         {

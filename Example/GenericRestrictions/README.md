@@ -6,6 +6,22 @@ illustrations with the relevant declarations included. They remain in Markdown
 intentionally so the package's normal example assembly continues to compile;
 use one case at a time when testing a diagnostic in a Unity project.
 
+## Runnable U# scripts
+
+These scripts are active members of the registered UdonSharp example assembly.
+Each runs the supported pattern and keeps the corresponding rejected syntax as
+comments so Unity can still compile the package. Every script has a matching
+`UdonSharpProgramAsset`, and `Interact()` runs its active demonstration.
+
+| Restriction | UdonSharp example |
+|-------------|-------------------|
+| Open generics | [`OpenGenericsExample.cs`](OpenGenericsExample.cs) |
+| Generic behaviours | [`GenericBehavioursExample.cs`](GenericBehavioursExample.cs) |
+| Generic heap objects | [`GenericHeapObjectsExample.cs`](GenericHeapObjectsExample.cs) |
+| `List<T>` | [`ListTypesExample.cs`](ListTypesExample.cs) |
+| Unsupported interface members | [`InterfaceMembersExample.cs`](InterfaceMembersExample.cs) |
+| Multiple concrete bases | [`MultipleConcreteBasesExample.cs`](MultipleConcreteBasesExample.cs) |
+
 ## Open generics
 
 An unbound type, or a runtime type that still contains a type parameter, has no
