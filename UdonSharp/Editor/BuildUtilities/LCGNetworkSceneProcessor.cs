@@ -2,11 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using HarmonyLib;
 using UdonSharp;
 using UdonSharp.Compiler;
 using UnityEditor;
 using UnityEditor.Build;
 using UnityEditor.Build.Reporting;
+using UnityEditor.Callbacks;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using VRC.SDK3.Components;
@@ -14,45 +16,103 @@ using VRC.SDK3.UdonNetworkCalling;
 using VRC.SDKBase;
 using VRC.SDKBase.Network;
 using VRC.Udon;
+using VRC.Udon.Common;
 using Object = UnityEngine.Object;
 
 namespace UdonSharpEditor
 {
     /// <summary>
-    /// Adds LCG networking infrastructure to Unity's disposable build-scene copy.
+    /// Adds LCG networking infrastructure to Unity's temporary Play Mode or build-scene copy.
     /// Runs before the SDK Udon scene processor (order 0).
     /// </summary>
+    [InitializeOnLoad]
     internal sealed class LCGNetworkSceneProcessor : IProcessSceneWithReport
     {
         private const string RuntimeObjectName = "__LCGRuntime";
         private const string MailboxObjectName = "__LCGRuntimePlayer";
+        private static readonly Dictionary<int, LCGRuntime> PreparedPlayScenes = new Dictionary<int, LCGRuntime>();
+        private static MethodInfo startClientSim;
+        private static bool clientSimStartPending;
+
+        static LCGNetworkSceneProcessor()
+        {
+            EditorApplication.playModeStateChanged += state => {
+                if (state == PlayModeStateChange.ExitingEditMode || state == PlayModeStateChange.EnteredEditMode)
+                {
+                    PreparedPlayScenes.Clear();
+                    clientSimStartPending = false;
+                }
+            };
+
+            // ClientSim discovers and clones PlayerObjects in BeforeSceneLoad, before
+            // Unity's scene-processing callbacks. Start it after scene preparation,
+            // but still before sceneLoaded and its AfterSceneLoad callback. Keep this
+            // optional so the compiler has no assembly dependency on ClientSim.
+            Type clientSim = Type.GetType("VRC.SDK3.ClientSim.ClientSimRuntimeLoader, VRC.ClientSim");
+            MethodInfo beforeSceneLoad = clientSim?.GetMethod("OnBeforeSceneLoad", BindingFlags.NonPublic | BindingFlags.Static);
+            startClientSim = clientSim?.GetMethod("StartClientSim", Type.EmptyTypes);
+            if (beforeSceneLoad != null && startClientSim != null)
+            {
+                using (new UdonSharpUtils.UdonSharpAssemblyLoadStripScope())
+                    new Harmony("LogicCuteGuy.LCGNetworking.ClientSim").Patch(beforeSceneLoad,
+                        prefix: new HarmonyMethod(typeof(LCGNetworkSceneProcessor), nameof(DeferClientSimStart)));
+            }
+        }
+
+        private static bool DeferClientSimStart()
+        {
+            if (!Application.isPlaying)
+                return true;
+            // No scene-processing callback is guaranteed when scene reload is disabled.
+            // Leave ClientSim's normal startup intact in that unsupported LCG mode.
+            if (EditorSettings.enterPlayModeOptionsEnabled &&
+                (EditorSettings.enterPlayModeOptions & EnterPlayModeOptions.DisableSceneReload) != 0)
+                return true;
+            clientSimStartPending = true;
+            return false;
+        }
+
+        [PostProcessScene(10000)]
+        private static void StartClientSimAfterSceneProcessing()
+        {
+            if (!Application.isPlaying || !clientSimStartPending)
+                return;
+            clientSimStartPending = false;
+            startClientSim.Invoke(null, null);
+        }
 
         public int callbackOrder => -1000;
 
         public void OnProcessScene(Scene scene, BuildReport report)
         {
-            if (!scene.IsValid() || Application.isPlaying)
+            // Unity also invokes this callback when loading scenes for Play Mode.
+            // Configure that temporary copy before the SDK initializes its Udon programs.
+            if (!scene.IsValid())
+                return;
+            if (Application.isPlaying && PreparedPlayScenes.TryGetValue(scene.handle, out var prepared) && prepared != null)
                 return;
 
             List<LCGNetworkZone> zones = GetSceneComponents<LCGNetworkZone>(scene);
             ValidateZones(zones);
+            foreach (LCGNetworkZone zone in zones)
+                ValidateZoneBehaviours(zone, GetScopedObjects(zone));
 
             GameObject runtimeObject = new GameObject(RuntimeObjectName);
             SceneManager.MoveGameObjectToScene(runtimeObject, scene);
-            LCGRuntime runtime = runtimeObject.AddUdonSharpComponent<LCGRuntime>();
+            LCGRuntime runtime = AddSceneBehaviour<LCGRuntime>(runtimeObject);
 
             GameObject mailboxObject = new GameObject(MailboxObjectName);
             SceneManager.MoveGameObjectToScene(mailboxObject, scene);
             mailboxObject.AddComponent<VRCPlayerObject>();
-            LCGRuntimePlayer mailbox = mailboxObject.AddUdonSharpComponent<LCGRuntimePlayer>();
+            LCGRuntimePlayer mailbox = AddSceneBehaviour<LCGRuntimePlayer>(mailboxObject);
             mailbox.Configure(runtime);
 
+            HashSet<GameObject> changedNetworkObjects = new HashSet<GameObject>();
             int nextReceiverId = 0;
             for (int zoneIndex = 0; zoneIndex < zones.Count; zoneIndex++)
             {
                 LCGNetworkZone zone = zones[zoneIndex];
                 List<GameObject> scopedObjects = GetScopedObjects(zone);
-                ValidateZoneBehaviours(zone, scopedObjects);
 
                 List<GameObject> protectedObjects = new List<GameObject>();
                 for (int i = 0; i < scopedObjects.Count; i++)
@@ -67,9 +127,10 @@ namespace UdonSharpEditor
                         continue;
 
                     protectedObjects.Add(target);
+                    changedNetworkObjects.Add(target);
                     LCGZoneOwnershipGuard guard = target.GetComponent<LCGZoneOwnershipGuard>();
                     if (guard == null)
-                        guard = target.AddUdonSharpComponent<LCGZoneOwnershipGuard>();
+                        guard = AddSceneBehaviour<LCGZoneOwnershipGuard>(target);
                     guard.Configure(zone);
 
                     if (objectSync != null)
@@ -77,13 +138,21 @@ namespace UdonSharpEditor
                         Object.DestroyImmediate(objectSync);
                         LCGManualObjectSync manualSync = target.GetComponent<LCGManualObjectSync>();
                         if (manualSync == null)
-                            manualSync = target.AddUdonSharpComponent<LCGManualObjectSync>();
+                            manualSync = AddSceneBehaviour<LCGManualObjectSync>(target);
                         manualSync.Configure(runtime, zone, nextReceiverId++);
                     }
                 }
 
                 zone.Configure(zoneIndex + 1, runtime, protectedObjects.ToArray(),
                     scopedObjects.Where(target => target != zone.gameObject).ToArray());
+
+                // NoVariableSync permits either backing sync mode. Use Manual in the
+                // processed zone so it does not retain the SDK's Continuous default.
+                foreach (GameObject target in scopedObjects)
+                    foreach (UdonBehaviour behaviour in target.GetComponents<UdonBehaviour>())
+                        if (behaviour.programSource is UdonSharpProgramAsset asset &&
+                            asset.behaviourSyncMode == BehaviourSyncMode.NoVariableSync)
+                            behaviour.SyncMethod = Networking.SyncType.Manual;
             }
 
             BuildPacketRegistry(scene, runtime, zones, out UdonBehaviour[] receivers, out string[] addresses,
@@ -95,8 +164,60 @@ namespace UdonSharpEditor
                 kinds, parameterOffsets, parameterCounts, parameterNames, parameterTypes,
                 callbackEvents, callbackParameters, valueTypes);
             runtime.SetPacketDefaultValues(defaultValues);
+            runtime.SetPlayerObjectReceivers(receivers.Select(receiver =>
+                receiver.GetComponentInParent<VRCPlayerObject>(true) != null).ToArray());
             CopyProxyState(runtime, mailbox, zones);
-            ConfigureNetworkIds();
+            ConfigureNetworkIds(scene, changedNetworkObjects);
+            RegisterMailboxTemplate(scene, mailboxObject.GetComponent<VRCPlayerObject>());
+            if (Application.isPlaying)
+                PreparedPlayScenes[scene.handle] = runtime;
+        }
+
+        private static void RegisterMailboxTemplate(Scene scene, VRCPlayerObject mailbox)
+        {
+            // The SDK's ConfigureScenePlayerPersistence runs before Unity processes
+            // the build-scene copy. It cannot discover the mailbox created here.
+            // The client clones only templates registered on the descriptor.
+            VRCSceneDescriptor descriptor = GetSceneComponents<VRCSceneDescriptor>(scene).FirstOrDefault();
+            if (descriptor == null)
+                return;
+
+            var templates = new List<VRCPlayerObject>(descriptor.PlayerPersistence ?? Array.Empty<VRCPlayerObject>());
+            if (!templates.Contains(mailbox))
+                templates.Add(mailbox);
+            descriptor.PlayerPersistence = templates.ToArray();
+
+            // Match the SDK's build preparation: the scene object is an inactive
+            // template; the client activates each player's clone. ClientSim manages
+            // template activation itself during Play Mode initialization.
+            if (!Application.isPlaying)
+                mailbox.gameObject.SetActive(false);
+        }
+
+        private static T AddSceneBehaviour<T>(GameObject target) where T : UdonSharpBehaviour
+        {
+            // AddUdonSharpComponent initializes the VM immediately in Play Mode.
+            // Scene processing must leave initialization to the SDK after all references
+            // and networking settings have been populated.
+            T proxy = target.AddComponent<T>();
+            UdonSharpEditorUtility.RunBehaviourSetup(proxy);
+            UdonSharpEditorUtility.GetBackingUdonBehaviour(proxy).SyncMethod = Networking.SyncType.Manual;
+            return proxy;
+        }
+
+        internal static void SetPacketBinding(UdonBehaviour behaviour, UdonBehaviour runtime,
+            int receiverId, int zoneId)
+        {
+            SetVariable(behaviour, "__lcgRuntime", runtime);
+            SetVariable(behaviour, "__lcgReceiverId", receiverId);
+            SetVariable(behaviour, "__lcgZoneId", zoneId);
+        }
+
+        private static void SetVariable<T>(UdonBehaviour behaviour, string name, T value)
+        {
+            if (!behaviour.publicVariables.TrySetVariableValue(name, value) &&
+                !behaviour.publicVariables.TryAddVariable(new UdonVariable<T>(name, value)))
+                throw new BuildFailedException($"Could not configure LCG variable '{name}' on '{behaviour.name}'.");
         }
 
         private static void BuildPacketRegistry(Scene scene, LCGRuntime runtime, List<LCGNetworkZone> zones,
@@ -224,12 +345,13 @@ namespace UdonSharpEditor
             for (int i = 0; i < allUdonSharpBehaviours.Count; i++)
             {
                 UdonBehaviour behaviour = allUdonSharpBehaviours[i];
+                var program = ((UdonSharpProgramAsset)behaviour.programSource).GetRealProgram();
+                if (program?.SymbolTable == null || !program.SymbolTable.HasAddressForSymbol("__lcgRuntime"))
+                    continue;
                 int receiverId = receiverList.IndexOf(behaviour);
                 LCGNetworkZone nearestZone = behaviour.GetComponentInParent<LCGNetworkZone>(true);
                 int zoneId = nearestZone != null ? nearestZone.ZoneId : 0;
-                behaviour.publicVariables.TrySetVariableValue("__lcgRuntime", runtimeBacking);
-                behaviour.publicVariables.TrySetVariableValue("__lcgReceiverId", receiverId);
-                behaviour.publicVariables.TrySetVariableValue("__lcgZoneId", zoneId);
+                SetPacketBinding(behaviour, runtimeBacking, receiverId, zoneId);
             }
 
             receivers = receiverList.ToArray();
@@ -279,6 +401,10 @@ namespace UdonSharpEditor
         {
             for (int i = 0; i < zones.Count; i++)
             {
+                if (zones[i].GetComponentInParent<VRCPlayerObject>(true) != null ||
+                    zones[i].GetComponentsInChildren<VRCPlayerObject>(true).Length != 0)
+                    throw new BuildFailedException(
+                        $"LCGNetworkZone '{GetPath(zones[i].transform)}' cannot contain or be inside a PlayerObject. Keep PlayerObject packet receivers outside zone hierarchies.");
                 Collider collider = zones[i].GetComponent<Collider>();
                 if (collider == null || !collider.isTrigger)
                     throw new BuildFailedException($"LCGNetworkZone '{GetPath(zones[i].transform)}' requires a trigger Collider.");
@@ -302,7 +428,9 @@ namespace UdonSharpEditor
             {
                 foreach (UdonBehaviour behaviour in target.GetComponents<UdonBehaviour>())
                 {
-                    if (behaviour.SyncMethod == Networking.SyncType.Continuous)
+                    bool hasNoVariableSync = behaviour.programSource is UdonSharpProgramAsset noSyncAsset &&
+                                             noSyncAsset.behaviourSyncMode == BehaviourSyncMode.NoVariableSync;
+                    if (behaviour.SyncMethod == Networking.SyncType.Continuous && !hasNoVariableSync)
                         throw new BuildFailedException(
                             $"Continuous Udon networking is not supported inside LCGNetworkZone '{GetPath(zone.transform)}': '{GetPath(target.transform)}'.");
 
@@ -344,23 +472,31 @@ namespace UdonSharpEditor
         private static void CopyProxyState(LCGRuntime runtime, LCGRuntimePlayer mailbox,
             IEnumerable<LCGNetworkZone> zones)
         {
-            UdonSharpEditorUtility.CopyProxyToUdon(runtime);
-            UdonSharpEditorUtility.CopyProxyToUdon(mailbox);
+            UdonSharpEditorUtility.CopyProxyToUdon(runtime, ProxySerializationPolicy.PreBuildSerialize);
+            UdonSharpEditorUtility.CopyProxyToUdon(mailbox, ProxySerializationPolicy.PreBuildSerialize);
             foreach (LCGNetworkZone zone in zones)
             {
-                UdonSharpEditorUtility.CopyProxyToUdon(zone);
+                UdonSharpEditorUtility.CopyProxyToUdon(zone, ProxySerializationPolicy.PreBuildSerialize);
                 foreach (LCGZoneOwnershipGuard guard in zone.GetComponentsInChildren<LCGZoneOwnershipGuard>(true))
-                    UdonSharpEditorUtility.CopyProxyToUdon(guard);
+                    UdonSharpEditorUtility.CopyProxyToUdon(guard, ProxySerializationPolicy.PreBuildSerialize);
                 foreach (LCGManualObjectSync sync in zone.GetComponentsInChildren<LCGManualObjectSync>(true))
-                    UdonSharpEditorUtility.CopyProxyToUdon(sync);
+                    UdonSharpEditorUtility.CopyProxyToUdon(sync, ProxySerializationPolicy.PreBuildSerialize);
             }
         }
 
-        private static void ConfigureNetworkIds()
+        private static void ConfigureNetworkIds(Scene scene, HashSet<GameObject> changedNetworkObjects)
         {
-            VRC_SceneDescriptor descriptor = VRC_SceneDescriptor.Instance;
+            VRC_SceneDescriptor descriptor = GetSceneComponents<VRC_SceneDescriptor>(scene).FirstOrDefault();
             if (descriptor == null)
                 return;
+
+            // The SDK may already have assigned IDs in the authoring scene. Adding
+            // guards and replacing ObjectSync changes those objects' component types.
+            // Refresh only the entries we transformed, retaining their existing IDs.
+            if (descriptor.NetworkIDCollection != null)
+                foreach (NetworkIDPair pair in descriptor.NetworkIDCollection)
+                    if (pair.gameObject != null && changedNetworkObjects.Contains(pair.gameObject))
+                        pair.SerializedTypeNames = NetworkIDAssignment.GetSerializedTypes(pair.gameObject);
 
             NetworkIDAssignment.ConfigureNetworkIDs(descriptor,
                 out List<NetworkIDAssignment.SetErrorLocation> errors,

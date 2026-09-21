@@ -2,6 +2,8 @@ using System;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.Serialization;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using NUnit.Framework;
 using UnityEngine;
 
@@ -72,6 +74,29 @@ namespace UdonSharp.Tests
         }
 
         [Test]
+        public void SignedByteWireEncoding_RoundTripsEveryValue()
+        {
+            MethodInfo encode = typeof(LCGRuntime).GetMethod("EncodeValue",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            MethodInfo decode = typeof(LCGRuntime).GetMethod("DecodeValue",
+                BindingFlags.NonPublic | BindingFlags.Static);
+
+            for (int value = sbyte.MinValue; value <= sbyte.MaxValue; value++)
+            {
+                byte[] encoded = (byte[])encode.Invoke(null,
+                    new object[] { (int)LCGPacketType.SByte, (sbyte)value });
+                Assert.That(encoded, Is.EqualTo(new[] { (byte)(value & 255) }), "Wire value " + value);
+                Assert.That(decode.Invoke(null,
+                    new object[] { (int)LCGPacketType.SByte, encoded, 0, encoded.Length }),
+                    Is.EqualTo((sbyte)value), "Round trip " + value);
+            }
+            Assert.That(decode.Invoke(null,
+                new object[] { (int)LCGPacketType.SByte, new byte[0], 0, 0 }), Is.Null);
+            Assert.That(decode.Invoke(null,
+                new object[] { (int)LCGPacketType.SByte, new byte[2], 0, 2 }), Is.Null);
+        }
+
+        [Test]
         public void ManualObjectSync_HasStaticRequestApi()
         {
             MethodInfo request = typeof(LCGNetwork).GetMethod(nameof(LCGNetwork.RequestObjectSync),
@@ -106,6 +131,43 @@ namespace UdonSharp.Tests
             object result = null;
             Assert.DoesNotThrow(() => result = hasAttribute.Invoke(unboundMethod, Array.Empty<object>()));
             Assert.That(result, Is.False);
+        }
+
+        [TestCase("ReceiveAnnouncement", true)]
+        [TestCase("LocalOnly", false)]
+        public void CompilerSymbol_DetectsSourcePacketAttributeBeforeBinding(string methodName, bool expected)
+        {
+            SyntaxTree tree = CSharpSyntaxTree.ParseText(@"using System;
+namespace UdonSharp
+{
+    public sealed class LCGPacketAttribute : Attribute { }
+}
+public class PacketReceiver
+{
+    [UdonSharp.LCGPacket] public void ReceiveAnnouncement(string message) { }
+    public void LocalOnly(string message) { }
+}");
+            CSharpCompilation compilation = CSharpCompilation.Create("PacketAttributeRegression",
+                new[] { tree },
+                new[] { MetadataReference.CreateFromFile(typeof(object).Assembly.Location) },
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            Assert.That(compilation.GetDiagnostics().Where(diagnostic =>
+                diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error), Is.Empty);
+
+            IMethodSymbol sourceMethod = compilation.GetTypeByMetadataName("PacketReceiver")
+                .GetMembers(methodName).OfType<IMethodSymbol>().Single();
+            Assembly compilerAssembly = typeof(Compiler.UdonSharpCompilerV1).Assembly;
+            Type symbolType = compilerAssembly.GetType("UdonSharp.Compiler.Symbols.Symbol", true);
+            Type methodSymbolType = compilerAssembly.GetType(
+                "UdonSharp.Compiler.Symbols.UdonSharpBehaviourMethodSymbol", true);
+            object unboundMethod = FormatterServices.GetUninitializedObject(methodSymbolType);
+            symbolType.GetField("<RoslynSymbol>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)
+                .SetValue(unboundMethod, sourceMethod);
+            MethodInfo hasAttribute = symbolType
+                .GetMethod("HasAttribute", BindingFlags.Instance | BindingFlags.NonPublic)
+                .MakeGenericMethod(typeof(LCGPacketAttribute));
+
+            Assert.That(hasAttribute.Invoke(unboundMethod, Array.Empty<object>()), Is.EqualTo(expected));
         }
 
         [Test]

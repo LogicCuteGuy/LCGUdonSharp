@@ -46,6 +46,8 @@ namespace UdonSharp.Compiler
     
     internal class CompilationContext
     {
+        internal const string LCGNetworkDiagnosticsDefine = "LCG_NETWORK_DIAGNOSTICS";
+
         internal class CompileDiagnostic
         {
             public DiagnosticSeverity Severity { get; }
@@ -212,14 +214,15 @@ namespace UdonSharp.Compiler
         
         private static Dictionary<string, IEnumerable<ScriptAssembly>> _builtScriptCache = new Dictionary<string, IEnumerable<ScriptAssembly>>();
 
-        private static string GetBuildAssemblyCacheKey(bool isEditorBuild, BuildTarget buildTarget)
+        private static string GetBuildAssemblyCacheKey(bool isEditorBuild, BuildTarget buildTarget, bool lcgNetworkDiagnostics)
         {
-            return $"{buildTarget}_{(isEditorBuild ? "editor" : "runtime")}";
+            return $"{buildTarget}_{(isEditorBuild ? "editor" : "runtime")}_{lcgNetworkDiagnostics}";
         }
 
         public static IEnumerable<ScriptAssembly> GetBuildAssemblies(bool isEditorBuild, BuildTarget buildTarget)
         {
-            string cacheKey = GetBuildAssemblyCacheKey(isEditorBuild, buildTarget);
+            bool lcgNetworkDiagnostics = UdonSharpSettings.GetSettings().lcgNetworkDiagnostics;
+            string cacheKey = GetBuildAssemblyCacheKey(isEditorBuild, buildTarget, lcgNetworkDiagnostics);
             if (_builtScriptCache.TryGetValue(cacheKey, out var cachedPaths))
                 return cachedPaths;
             
@@ -238,6 +241,8 @@ namespace UdonSharp.Compiler
 
                     scriptAssembly.SourceFiles.AddRange(assemblySourcePaths);
                     scriptAssembly.Defines.AddRange(UdonSharpUtils.GetProjectDefines(asm.defines, isEditorBuild, buildTarget));
+                    if (lcgNetworkDiagnostics)
+                        scriptAssembly.Defines.Add(LCGNetworkDiagnosticsDefine);
                     
                     scriptAssemblies.Add(scriptAssembly);
                 }

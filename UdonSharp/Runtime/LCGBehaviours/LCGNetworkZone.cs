@@ -41,10 +41,12 @@ namespace UdonSharp
             epoch++;
             if (occupants.Length == 1)
                 TransferProtectedOwnership(player);
-            if (player.isLocal && runtime != null)
-                runtime.RequestZoneSnapshot(zoneId, player);
             if (player.isLocal && exitMode == LCGZoneExitMode.DisableChildren)
                 SetExitControlledObjectsActive(true);
+            // Each client can observe entry at a different time. The entrant asks
+            // for a snapshot, and owners also push one when they observe entry.
+            if (runtime != null)
+                runtime.RequestZoneSnapshot(zoneId, player);
         }
 
         public override void OnPlayerTriggerExit(VRCPlayerApi player)
@@ -222,20 +224,4 @@ namespace UdonSharp
         }
     }
 
-    [PublicAPI]
-    [UdonBehaviourSyncMode(BehaviourSyncMode.NoVariableSync)]
-    public sealed class LCGZoneOwnershipGuard : UdonSharpBehaviour
-    {
-        [SerializeField, HideInInspector] private LCGNetworkZone zone;
-
-        internal void Configure(LCGNetworkZone protectedZone)
-        {
-            zone = protectedZone;
-        }
-
-        public override bool OnOwnershipRequest(VRCPlayerApi requestingPlayer, VRCPlayerApi requestedOwner)
-        {
-            return zone != null && zone.CanTakeOwnership(requestingPlayer) && zone.CanTakeOwnership(requestedOwner);
-        }
-    }
 }

@@ -1991,8 +1991,16 @@ namespace UdonSharpEditor
             {
                 if (UdonSharpEditorUtility.IsUdonSharpBehaviour(rootBehaviour))
                 {
+                    // LCG bindings are compiler-generated and have no C# proxy fields.
+                    // Preserve the scene processor's values across proxy serialization.
+                    bool hasLcgBinding = rootBehaviour.publicVariables.TryGetVariableValue<UdonBehaviour>(
+                        "__lcgRuntime", out var lcgRuntime);
+                    rootBehaviour.publicVariables.TryGetVariableValue<int>("__lcgReceiverId", out var lcgReceiverId);
+                    rootBehaviour.publicVariables.TryGetVariableValue<int>("__lcgZoneId", out var lcgZoneId);
                     UdonSharpEditorUtility.ClearBehaviourVariables(rootBehaviour, true);
                     UdonSharpEditorUtility.CopyProxyToUdon(UdonSharpEditorUtility.GetProxyBehaviour(rootBehaviour), ProxySerializationPolicy.PreBuildSerialize);
+                    if (hasLcgBinding)
+                        LCGNetworkSceneProcessor.SetPacketBinding(rootBehaviour, lcgRuntime, lcgReceiverId, lcgZoneId);
                     _serializePublicVariablesMethod.Invoke(rootBehaviour, Array.Empty<object>());
                 }
             }

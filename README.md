@@ -38,6 +38,36 @@ public void OnHealthChanged(VRCPlayerApi sender) { }
 
 Public `void` methods with up to eight supported arguments may also use `[LCGPacket]`. Direct calls remain local. `SendCustomNetworkEvent(...)` is lowered to mailbox delivery only when its target method has `[LCGPacket]`; `SendLCGNetworkEvent(player, ...)` provides targeted delivery.
 
-Add `LCGNetworkZone` to a trigger collider to restrict descendant packet recipients and ownership to players in the trigger. Build/Test scene copies receive one `LCGRuntime`, one PlayerObject mailbox template, ownership guards, and manual `VRCObjectSync` replacements; authoring scenes are not modified. Transform changes are local until `LCGNetwork.RequestObjectSync(gameObject)` is called.
+### User PlayerObjects
 
-Networking is event-driven: there is no Continuous sync or transform polling. A build fails closed for Continuous behaviours, networked Udon Graph behaviours, unrelated overlapping zones, and currently for `[UdonSynced]` fields under a zone. The last case prevents native VRC sync from escaping the zone until generated per-zone program variants are implemented. Native manual `[UdonSynced]` outside zones is unchanged.
+`[LCGPacket]` fields and methods can be placed on a `VRCPlayerObject` template or its children. LCG addresses each runtime clone by its template receiver and owning player. Field coalescing, unchanged-value suppression, and duplicate detection are independent for each clone; `ObjectOwner` authority checks the clone's owner. Prefer `ObjectOwner` for fields that only their player should change (the attribute defaults to `Any`).
+
+Wait for `OnPlayerRestored` before using a player's clone, and obtain it with `Networking.FindComponentInPlayerObjects(player, templateBehaviour)`. Calling an LCG event on that reference addresses that same player's clone on every recipient. `SendLCGNetworkEvent(recipient, ...)` selects the recipient client; it does not change which clone the reference identifies. Calls on the inactive template are rejected.
+
+Owners provide current packet-field snapshots when players are restored. Queued work and duplicate state for departing players are discarded. These are session snapshots: `[LCGPacket]` fields are not automatically saved by VRChat persistence, and packet methods are not replayed for late joiners.
+
+PlayerObject templates and `LCGNetworkZone` must be in separate hierarchies. Combining them fails the build before helpers are generated, because zone ownership transfer and cloned zones are not supported. Packet networking uses protocol version 2 with a clone-owner field; recompile all UdonSharp programs and rebuild the world after upgrading.
+
+Add `LCGNetworkZone` to a trigger collider to restrict descendant packet recipients and ownership to players in the trigger. Play Mode and Build/Test scene copies receive one `LCGRuntime`, one PlayerObject mailbox template, ownership guards, and manual `VRCObjectSync` replacements; authoring scenes are not modified. In Play Mode, the generated roots appear as `__LCGRuntime` and `__LCGRuntimePlayer` and are removed when you stop playing. Scripted transform changes are local until `LCGNetwork.RequestObjectSync(gameObject)` is called; pickups send movement automatically as described below.
+
+Play Mode setup requires scene reload (Unity's default). When ClientSim is installed, its initial startup is deferred until scene processing finishes so it can discover and clone the generated PlayerObject mailbox.
+
+Pickups automatically request object sync up to ten times per second while held and after release until their rigidbody sleeps. Only the owner sends, and zone membership still restricts delivery. Other scripted transform changes require `LCGNetwork.RequestObjectSync(gameObject)`.
+
+On zone entry or re-entry, the entering player requests current state and each object owner also sends a snapshot when it observes that entry. This refreshes stationary objects and packet fields even when the clients receive trigger events in different orders.
+
+LCG diagnostic logging is off by default. Enable **Edit > Project Settings > Udon Sharp > Debugging > LCG network diagnostics** before compiling to include pickup and packet-delivery output. When disabled, those log branches are omitted from the generated Udon programs. Recompile UdonSharp programs after changing the setting. VRChat's own logs and compiler errors are unaffected.
+
+Networking uses manual packets, with movement sampling active only during pickup motion. A build fails closed for Continuous behaviours, networked Udon Graph behaviours, unrelated overlapping zones, and currently for `[UdonSynced]` fields under a zone. The last case prevents native VRC sync from escaping the zone until generated per-zone program variants are implemented. Native manual `[UdonSynced]` outside zones is unchanged.
+
+## Examples
+
+The `Example` folder contains runnable scenes and scripts that exercise each
+feature.
+
+| Example | Feature | Description |
+|---------|---------|-------------|
+| [`Example/Interfaces`](Example/Interfaces/README.md) | Interface MVP | Defines `INumberOperation` with two implementations (`AddNumberOperation`, `MultiplyNumberOperation`). `InterfaceExampleRunner` invokes both through the interface and reads the property. |
+| [`Example/Networking`](Example/Networking/README.md) | LCG manual packets | Three showcases — coalesced packet fields with callbacks, ordered packet methods with broadcast and targeted delivery, and zone-scoped manual object sync. |
+
+Each example has its own `README.md` with setup steps and usage notes.

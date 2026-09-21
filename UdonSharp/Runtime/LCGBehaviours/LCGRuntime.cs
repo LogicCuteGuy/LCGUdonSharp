@@ -15,8 +15,8 @@ namespace UdonSharp
     [UdonBehaviourSyncMode(BehaviourSyncMode.NoVariableSync)]
     public sealed class LCGRuntime : UdonSharpBehaviour
     {
-        public const int ProtocolVersion = 1;
-        public const int HeaderSize = 24;
+        public const int ProtocolVersion = 2;
+        public const int HeaderSize = 28;
         public const int MaxFrameBytes = 12 * 1024;
         public const int MaxPendingFieldPackets = 128;
         public const int MaxPendingMethodPackets = 128;
@@ -25,12 +25,13 @@ namespace UdonSharp
         [SerializeField] private LCGRuntimePlayer mailboxTemplate;
         [SerializeField] private LCGNetworkZone[] zones = new LCGNetworkZone[0];
         [SerializeField] private UdonBehaviour[] receivers = new UdonBehaviour[0];
+        [SerializeField] private bool[] playerObjectReceivers = new bool[0];
         [SerializeField] private string[] packetAddresses = new string[0];
         [SerializeField] private int[] packetReceiverIds = new int[0];
         [SerializeField] private int[] packetAuthorities = new int[0];
         [SerializeField] private int[] packetKinds = new int[0];
         [SerializeField] private int[] packetValueTypes = new int[0];
-        [SerializeField] private object[] packetDefaultValues = new object[0];
+        [SerializeField] [VRC.Udon.Serialization.OdinSerializer.OdinSerialize] /* UdonSharp auto-upgrade: serialization */  private object[] packetDefaultValues = new object[0];
         [SerializeField] private int[] packetParameterOffsets = new int[0];
         [SerializeField] private int[] packetParameterCounts = new int[0];
         [SerializeField] private string[] packetParameterNames = new string[0];
@@ -39,12 +40,13 @@ namespace UdonSharp
         [SerializeField] private string[] packetCallbackParameters = new string[0];
 
         // Compiler-written send registers. Their names are part of the compiler/runtime ABI.
+        [HideInInspector] public UdonBehaviour __lcgSenderReceiver;
         [HideInInspector] public int __lcgSenderReceiverId;
         [HideInInspector] public int __lcgSenderZoneId;
         [HideInInspector] public int __lcgSenderEpoch;
         [HideInInspector] public int __lcgSenderType;
         [HideInInspector] public string __lcgSenderAddress;
-        [HideInInspector] public object __lcgSenderValue;
+        [HideInInspector] [VRC.Udon.Serialization.OdinSerializer.OdinSerialize] /* UdonSharp auto-upgrade: serialization */  public object __lcgSenderValue;
         [HideInInspector] public bool __lcgSenderForce;
         [HideInInspector] public int __lcgSenderTargetMode;
         [HideInInspector] public VRCPlayerApi __lcgSenderPlayer;
@@ -57,26 +59,39 @@ namespace UdonSharp
         [HideInInspector] public int __lcgSenderArgType5;
         [HideInInspector] public int __lcgSenderArgType6;
         [HideInInspector] public int __lcgSenderArgType7;
-        [HideInInspector] public object __lcgSenderArg0;
-        [HideInInspector] public object __lcgSenderArg1;
-        [HideInInspector] public object __lcgSenderArg2;
-        [HideInInspector] public object __lcgSenderArg3;
-        [HideInInspector] public object __lcgSenderArg4;
-        [HideInInspector] public object __lcgSenderArg5;
-        [HideInInspector] public object __lcgSenderArg6;
-        [HideInInspector] public object __lcgSenderArg7;
+        [HideInInspector] [VRC.Udon.Serialization.OdinSerializer.OdinSerialize] /* UdonSharp auto-upgrade: serialization */  public object __lcgSenderArg0;
+        [HideInInspector] [VRC.Udon.Serialization.OdinSerializer.OdinSerialize] /* UdonSharp auto-upgrade: serialization */  public object __lcgSenderArg1;
+        [HideInInspector] [VRC.Udon.Serialization.OdinSerializer.OdinSerialize] /* UdonSharp auto-upgrade: serialization */  public object __lcgSenderArg2;
+        [HideInInspector] [VRC.Udon.Serialization.OdinSerializer.OdinSerialize] /* UdonSharp auto-upgrade: serialization */  public object __lcgSenderArg3;
+        [HideInInspector] [VRC.Udon.Serialization.OdinSerializer.OdinSerialize] /* UdonSharp auto-upgrade: serialization */  public object __lcgSenderArg4;
+        [HideInInspector] [VRC.Udon.Serialization.OdinSerializer.OdinSerialize] /* UdonSharp auto-upgrade: serialization */  public object __lcgSenderArg5;
+        [HideInInspector] [VRC.Udon.Serialization.OdinSerializer.OdinSerialize] /* UdonSharp auto-upgrade: serialization */  public object __lcgSenderArg6;
+        [HideInInspector] [VRC.Udon.Serialization.OdinSerializer.OdinSerialize] /* UdonSharp auto-upgrade: serialization */  public object __lcgSenderArg7;
         [HideInInspector] public GameObject __lcgObjectSyncTarget;
 
         private int sequence;
+#if LCG_NETWORK_DIAGNOSTICS
+        private int deliveryDiagnostics;
+
+        private void TraceDelivery(int flag, string message)
+        {
+            if ((deliveryDiagnostics & flag) != 0)
+                return;
+            deliveryDiagnostics |= flag;
+            Debug.Log("[LCG sync] " + message);
+        }
+#endif
         private int pendingFieldCount;
         private bool fieldFlushScheduled;
         private int[] pendingFieldReceiverIds = new int[MaxPendingFieldPackets];
+        private int[] pendingFieldOwnerIds = new int[MaxPendingFieldPackets];
         private int[] pendingFieldZoneIds = new int[MaxPendingFieldPackets];
         private int[] pendingFieldTypes = new int[MaxPendingFieldPackets];
         private string[] pendingFieldAddresses = new string[MaxPendingFieldPackets];
         private object[] pendingFieldPayloads = new object[MaxPendingFieldPackets];
         private int sentFieldCount;
         private int[] sentFieldReceiverIds = new int[MaxPendingFieldPackets];
+        private int[] sentFieldOwnerIds = new int[MaxPendingFieldPackets];
         private int[] sentFieldZoneIds = new int[MaxPendingFieldPackets];
         private string[] sentFieldAddresses = new string[MaxPendingFieldPackets];
         private object[] sentFieldPayloads = new object[MaxPendingFieldPackets];
@@ -91,6 +106,7 @@ namespace UdonSharp
         private int[] receivePlayerIds = new int[0];
         private int[] receiveZoneIds = new int[0];
         private int[] receiveReceiverIds = new int[0];
+        private int[] receiveOwnerIds = new int[0];
         private int[] receiveEpochs = new int[0];
         private int[] receiveSequences = new int[0];
 
@@ -121,6 +137,45 @@ namespace UdonSharp
             packetDefaultValues = defaultValues ?? new object[0];
         }
 
+        internal void SetPlayerObjectReceivers(bool[] flags)
+        {
+            playerObjectReceivers = flags ?? new bool[0];
+        }
+
+        private bool IsPlayerObjectReceiver(int receiverId)
+        {
+            return receiverId >= 0 && receiverId < playerObjectReceivers.Length && playerObjectReceivers[receiverId];
+        }
+
+        // -1 identifies a scene receiver; -2 rejects an unbound or missing clone.
+        private int GetReceiverOwnerId(int receiverId, UdonBehaviour instance)
+        {
+            if (receiverId < 0 || receiverId >= receivers.Length)
+                return -2;
+            if (!IsPlayerObjectReceiver(receiverId))
+                return -1;
+            if (instance == null || instance == receivers[receiverId])
+                return -2;
+            VRCPlayerApi owner = Networking.GetOwner(instance.gameObject);
+            if (!Utilities.IsValid(owner) || ResolveReceiver(receiverId, owner.playerId) != instance)
+                return -2;
+            return owner.playerId;
+        }
+
+        private UdonBehaviour ResolveReceiver(int receiverId, int ownerId)
+        {
+            if (receiverId < 0 || receiverId >= receivers.Length || receivers[receiverId] == null)
+                return null;
+            if (!IsPlayerObjectReceiver(receiverId))
+                return ownerId == -1 ? receivers[receiverId] : null;
+            if (ownerId < 0)
+                return null;
+            VRCPlayerApi owner = VRCPlayerApi.GetPlayerById(ownerId);
+            if (!Utilities.IsValid(owner))
+                return null;
+            return (UdonBehaviour)Networking.FindComponentInPlayerObjects(owner, receivers[receiverId]);
+        }
+
         public void RestoreZoneDefaults(int zoneId)
         {
             for (int i = 0; i < packetAddresses.Length; i++)
@@ -132,22 +187,25 @@ namespace UdonSharp
                 if (receiverId < 0 || receiverId >= receivers.Length || receivers[receiverId] == null)
                     continue;
                 object receiverZone = receivers[receiverId].GetProgramVariable("__lcgZoneId");
-                if (receiverZone is int && (int)receiverZone == zoneId)
+                if (receiverZone != null && receiverZone.GetType() == typeof(int) && (int)receiverZone == zoneId)
                     receivers[receiverId].SetProgramVariable(packetAddresses[i], packetDefaultValues[i]);
             }
         }
 
         public void __lcgSendField()
         {
+            int ownerId = GetReceiverOwnerId(__lcgSenderReceiverId, __lcgSenderReceiver);
+            if (ownerId < -1)
+                return;
             byte[] payload = EncodeValue(__lcgSenderType, __lcgSenderValue);
             if (payload == null)
                 return;
 
-            int pending = FindFieldKey(pendingFieldReceiverIds, pendingFieldZoneIds, pendingFieldAddresses,
-                pendingFieldCount, __lcgSenderReceiverId, __lcgSenderZoneId, __lcgSenderAddress);
+            int pending = FindFieldKey(pendingFieldReceiverIds, pendingFieldOwnerIds, pendingFieldZoneIds, pendingFieldAddresses,
+                pendingFieldCount, __lcgSenderReceiverId, ownerId, __lcgSenderZoneId, __lcgSenderAddress);
             if (pending >= 0)
             {
-                byte[] previous = pendingFieldPayloads[pending] as byte[];
+                byte[] previous = (byte[])pendingFieldPayloads[pending];
                 if (!__lcgSenderForce && ByteArraysEqual(previous, payload))
                     return;
                 pendingFieldTypes[pending] = __lcgSenderType;
@@ -155,14 +213,15 @@ namespace UdonSharp
             }
             else
             {
-                int sent = FindFieldKey(sentFieldReceiverIds, sentFieldZoneIds, sentFieldAddresses,
-                    sentFieldCount, __lcgSenderReceiverId, __lcgSenderZoneId, __lcgSenderAddress);
-                if (!__lcgSenderForce && sent >= 0 && ByteArraysEqual(sentFieldPayloads[sent] as byte[], payload))
+                int sent = FindFieldKey(sentFieldReceiverIds, sentFieldOwnerIds, sentFieldZoneIds, sentFieldAddresses,
+                    sentFieldCount, __lcgSenderReceiverId, ownerId, __lcgSenderZoneId, __lcgSenderAddress);
+                if (!__lcgSenderForce && sent >= 0 && ByteArraysEqual((byte[])sentFieldPayloads[sent], payload))
                     return;
                 if (pendingFieldCount >= MaxPendingFieldPackets)
                     return;
                 pending = pendingFieldCount++;
                 pendingFieldReceiverIds[pending] = __lcgSenderReceiverId;
+                pendingFieldOwnerIds[pending] = ownerId;
                 pendingFieldZoneIds[pending] = __lcgSenderZoneId;
                 pendingFieldTypes[pending] = __lcgSenderType;
                 pendingFieldAddresses[pending] = __lcgSenderAddress;
@@ -197,13 +256,14 @@ namespace UdonSharp
             {
                 LCGNetworkZone zone = FindZone(pendingFieldZoneIds[i]);
                 int epoch = zone != null ? zone.Epoch : 0;
-                byte[] payload = pendingFieldPayloads[i] as byte[];
+                byte[] payload = (byte[])pendingFieldPayloads[i];
                 byte[] frame = BuildFieldFrameFromPayload(pendingFieldReceiverIds[i], pendingFieldZoneIds[i], epoch,
                     sequence++, pendingFieldTypes[i], pendingFieldAddresses[i], payload);
-                if (frame != null)
+                if (frame != null && ResolveReceiver(pendingFieldReceiverIds[i], pendingFieldOwnerIds[i]) != null)
                 {
+                    WriteInt32(frame, 24, pendingFieldOwnerIds[i]);
                     BroadcastFrame(frame, pendingFieldZoneIds[i], false);
-                    RememberSentField(pendingFieldReceiverIds[i], pendingFieldZoneIds[i],
+                    RememberSentField(pendingFieldReceiverIds[i], pendingFieldOwnerIds[i], pendingFieldZoneIds[i],
                         pendingFieldAddresses[i], payload);
                 }
                 pendingFieldPayloads[i] = null;
@@ -213,6 +273,7 @@ namespace UdonSharp
             {
                 int source = i + count;
                 pendingFieldReceiverIds[i] = pendingFieldReceiverIds[source];
+                pendingFieldOwnerIds[i] = pendingFieldOwnerIds[source];
                 pendingFieldZoneIds[i] = pendingFieldZoneIds[source];
                 pendingFieldTypes[i] = pendingFieldTypes[source];
                 pendingFieldAddresses[i] = pendingFieldAddresses[source];
@@ -229,6 +290,9 @@ namespace UdonSharp
 
         public void __lcgSendMethod()
         {
+            int ownerId = GetReceiverOwnerId(__lcgSenderReceiverId, __lcgSenderReceiver);
+            if (ownerId < -1)
+                return;
             if (__lcgSenderArgCount < 0 || __lcgSenderArgCount > 8)
                 return;
 
@@ -249,6 +313,7 @@ namespace UdonSharp
             if (frame == null)
                 return;
 
+            WriteInt32(frame, 24, ownerId);
             if (pendingMethodCount >= MaxPendingMethodPackets)
                 return;
             int queued = pendingMethodTail;
@@ -272,7 +337,7 @@ namespace UdonSharp
             for (int i = 0; i < count; i++)
             {
                 int queued = pendingMethodHead;
-                byte[] frame = pendingMethodFrames[queued] as byte[];
+                byte[] frame = (byte[])pendingMethodFrames[queued];
                 DispatchMethodFrame(frame, pendingMethodZoneIds[queued], pendingMethodTargets[queued],
                     pendingMethodPlayers[queued]);
                 pendingMethodFrames[queued] = null;
@@ -290,6 +355,9 @@ namespace UdonSharp
         private void DispatchMethodFrame(byte[] frame, int zoneId, int targetMode, VRCPlayerApi player)
         {
             if (frame == null)
+                return;
+            UdonBehaviour receiver = ResolveReceiver(ReadInt32(frame, 12), ReadInt32(frame, 24));
+            if (receiver == null)
                 return;
             LCGNetworkZone zone = FindZone(zoneId);
             WriteInt32(frame, 8, zone != null ? zone.Epoch : 0);
@@ -309,9 +377,7 @@ namespace UdonSharp
                 SendFrame(Networking.LocalPlayer, frame);
             else if (target == NetworkEventTarget.Owner)
             {
-                int receiverId = ReadInt32(frame, 12);
-                if (receiverId >= 0 && receiverId < receivers.Length && receivers[receiverId] != null)
-                    SendFrame(Networking.GetOwner(receivers[receiverId].gameObject), frame);
+                SendFrame(Networking.GetOwner(receiver.gameObject), frame);
             }
         }
 
@@ -327,9 +393,18 @@ namespace UdonSharp
             }
 
             Component found = Networking.FindComponentInPlayerObjects(player, mailboxTemplate);
-            LCGRuntimePlayer mailbox = found as LCGRuntimePlayer;
+            LCGRuntimePlayer mailbox = (LCGRuntimePlayer)found;
             if (mailbox == null)
+            {
+#if LCG_NETWORK_DIAGNOSTICS
+                TraceDelivery(1, "No mailbox for recipient " + player.playerId);
+#endif
                 return false;
+            }
+
+#if LCG_NETWORK_DIAGNOSTICS
+            TraceDelivery(2, "Sending to mailbox for recipient " + player.playerId);
+#endif
 
             mailbox.SendCustomNetworkEvent(NetworkEventTarget.Owner,
                 nameof(LCGRuntimePlayer.ReceiveFrame), frame);
@@ -354,33 +429,56 @@ namespace UdonSharp
                 if (SendFrame(player, frame))
                     sent++;
             }
-
+#if LCG_NETWORK_DIAGNOSTICS
+            TraceDelivery(sent > 0 ? 4 : 8, "Zone broadcast recipients=" + sent + ", zone=" + zoneId);
+#endif
             return sent;
         }
 
         internal void ReceiveFrame(byte[] frame, VRCPlayerApi sender)
         {
             if (!Utilities.IsValid(sender) || !ValidateFrame(frame))
+            {
+#if LCG_NETWORK_DIAGNOSTICS
+                TraceDelivery(16, "Rejected invalid sender or frame");
+#endif
                 return;
+            }
 
             int zoneId = ReadInt32(frame, 4);
             int frameEpoch = ReadInt32(frame, 8);
             int receiverId = ReadInt32(frame, 12);
+            int ownerId = ReadInt32(frame, 24);
             int frameSequence = ReadInt32(frame, 16);
             if (frameEpoch < 0 || frameSequence < 0)
                 return;
             if (zoneId != 0 && !IsZoneMember(zoneId, sender))
+            {
+#if LCG_NETWORK_DIAGNOSTICS
+                TraceDelivery(32, "Rejected sender outside zone " + zoneId);
+#endif
                 return;
+            }
             if (zoneId != 0 && !IsZoneMember(zoneId, Networking.LocalPlayer))
+            {
+#if LCG_NETWORK_DIAGNOSTICS
+                TraceDelivery(64, "Rejected receiver outside zone " + zoneId);
+#endif
                 return;
+            }
             if (receiverId < 0 || receiverId >= receivers.Length)
                 return;
-            UdonBehaviour receiver = receivers[receiverId];
+            UdonBehaviour receiver = ResolveReceiver(receiverId, ownerId);
             if (receiver == null)
                 return;
             object registeredZone = receiver.GetProgramVariable("__lcgZoneId");
-            if (!(registeredZone is int) || (int)registeredZone != zoneId)
+            if (registeredZone == null || registeredZone.GetType() != typeof(int) || (int)registeredZone != zoneId)
+            {
+#if LCG_NETWORK_DIAGNOSTICS
+                TraceDelivery(128, "Rejected mismatched receiver zone binding");
+#endif
                 return;
+            }
 
             int nameLength = ReadUInt16(frame, 20);
             int payloadLength = ReadUInt16(frame, 22);
@@ -394,7 +492,7 @@ namespace UdonSharp
             if (kind == 2)
             {
                 if (nameLength != 0 || payloadLength != 0 || !Networking.IsOwner(receiver.gameObject) ||
-                    !AcceptSequence(sender.playerId, zoneId, receiverId, frameEpoch, frameSequence))
+                    !AcceptSequence(sender.playerId, zoneId, receiverId, ownerId, frameEpoch, frameSequence))
                     return;
                 SendFieldSnapshot(receiverId, receiver, zoneId, sender);
                 return;
@@ -402,10 +500,15 @@ namespace UdonSharp
 
             int registration = FindRegistration(receiverId, address);
             if (registration < 0 || !CheckAuthority(packetAuthorities[registration], sender, receiver.gameObject))
+            {
+#if LCG_NETWORK_DIAGNOSTICS
+                TraceDelivery(256, "Rejected packet registration or sender authority: " + address);
+#endif
                 return;
+            }
             if (registration >= packetKinds.Length || packetKinds[registration] != kind)
                 return;
-            if (!AcceptSequence(sender.playerId, zoneId, receiverId, frameEpoch, frameSequence))
+            if (!AcceptSequence(sender.playerId, zoneId, receiverId, ownerId, frameEpoch, frameSequence))
                 return;
 
             int payloadOffset = HeaderSize + nameLength;
@@ -432,6 +535,9 @@ namespace UdonSharp
 
             if (kind == 1 && ApplyMethodPayload(receiver, registration, frame, payloadOffset, payloadLength))
             {
+#if LCG_NETWORK_DIAGNOSTICS
+                TraceDelivery(512, "Applying packet method: " + address);
+#endif
                 receiver.SetProgramVariable("__lcgPacketSender", sender);
                 receiver.SendCustomEvent(address);
             }
@@ -449,10 +555,15 @@ namespace UdonSharp
                 if (receiver == null || !HasFieldRegistration(receiverId))
                     continue;
                 object receiverZone = receiver.GetProgramVariable("__lcgZoneId");
-                if (!(receiverZone is int) || (int)receiverZone != zoneId)
+                if (receiverZone == null || receiverZone.GetType() != typeof(int) || (int)receiverZone != zoneId)
                     continue;
-                byte[] request = BuildSnapshotRequestFrame(receiverId, zoneId, zone.Epoch, sequence++);
-                SendFrame(Networking.GetOwner(receiver.gameObject), request);
+                if (Networking.IsOwner(receiver.gameObject))
+                    SendFieldSnapshot(receiverId, receiver, zoneId, player);
+                else if (player.isLocal)
+                {
+                    byte[] request = BuildSnapshotRequestFrame(receiverId, zoneId, zone.Epoch, sequence++);
+                    SendFrame(Networking.GetOwner(receiver.gameObject), request);
+                }
             }
             zone.SendSnapshot(player);
         }
@@ -463,13 +574,82 @@ namespace UdonSharp
             return zone != null && zone.Contains(player);
         }
 
+        public override void OnPlayerRestored(VRCPlayerApi player)
+        {
+            if (!Utilities.IsValid(player) || !Utilities.IsValid(Networking.LocalPlayer))
+                return;
+            for (int receiverId = 0; receiverId < receivers.Length; receiverId++)
+            {
+                if (!IsPlayerObjectReceiver(receiverId) || !HasFieldRegistration(receiverId))
+                    continue;
+                if (!player.isLocal)
+                {
+                    UdonBehaviour localClone = ResolveReceiver(receiverId, Networking.LocalPlayer.playerId);
+                    if (localClone != null)
+                        SendFieldSnapshot(receiverId, localClone, 0, player);
+                }
+
+                // Ask existing owners after our clones are restored. For a newly
+                // restored remote player, request only that player's clone.
+                VRCPlayerApi[] owners = new VRCPlayerApi[VRCPlayerApi.GetPlayerCount()];
+                VRCPlayerApi.GetPlayers(owners);
+                for (int i = 0; i < owners.Length; i++)
+                {
+                    VRCPlayerApi owner = owners[i];
+                    if (!Utilities.IsValid(owner) || owner.isLocal || (!player.isLocal && owner != player))
+                        continue;
+                    byte[] request = BuildSnapshotRequestFrame(receiverId, 0, 0, sequence++);
+                    WriteInt32(request, 24, owner.playerId);
+                    SendFrame(owner, request);
+                }
+            }
+        }
+
         public override void OnPlayerLeft(VRCPlayerApi player)
         {
             int removedPlayerId = player.playerId;
+            // Clear clone-specific suppression and queued work before a player ID
+            // can be reused. Null method slots are safely consumed by the FIFO.
+            for (int i = sentFieldCount - 1; i >= 0; i--)
+            {
+                if (sentFieldOwnerIds[i] != removedPlayerId)
+                    continue;
+                int last = --sentFieldCount;
+                sentFieldReceiverIds[i] = sentFieldReceiverIds[last];
+                sentFieldOwnerIds[i] = sentFieldOwnerIds[last];
+                sentFieldZoneIds[i] = sentFieldZoneIds[last];
+                sentFieldAddresses[i] = sentFieldAddresses[last];
+                sentFieldPayloads[i] = sentFieldPayloads[last];
+                sentFieldPayloads[last] = null;
+            }
+            for (int i = pendingFieldCount - 1; i >= 0; i--)
+            {
+                if (pendingFieldOwnerIds[i] != removedPlayerId)
+                    continue;
+                int last = --pendingFieldCount;
+                pendingFieldReceiverIds[i] = pendingFieldReceiverIds[last];
+                pendingFieldOwnerIds[i] = pendingFieldOwnerIds[last];
+                pendingFieldZoneIds[i] = pendingFieldZoneIds[last];
+                pendingFieldTypes[i] = pendingFieldTypes[last];
+                pendingFieldAddresses[i] = pendingFieldAddresses[last];
+                pendingFieldPayloads[i] = pendingFieldPayloads[last];
+                pendingFieldPayloads[last] = null;
+            }
+            for (int i = 0; i < pendingMethodCount; i++)
+            {
+                int slot = (pendingMethodHead + i) % MaxPendingMethodPackets;
+                byte[] frame = (byte[])pendingMethodFrames[slot];
+                if ((frame != null && ReadInt32(frame, 24) == removedPlayerId) ||
+                    pendingMethodPlayers[slot] == player)
+                {
+                    pendingMethodFrames[slot] = null;
+                    pendingMethodPlayers[slot] = null;
+                }
+            }
             int keepCount = 0;
             for (int i = 0; i < receivePlayerIds.Length; i++)
             {
-                if (receivePlayerIds[i] != removedPlayerId)
+                if (receivePlayerIds[i] != removedPlayerId && receiveOwnerIds[i] != removedPlayerId)
                     keepCount++;
             }
             if (keepCount == receivePlayerIds.Length)
@@ -478,16 +658,18 @@ namespace UdonSharp
             int[] nextPlayers = new int[keepCount];
             int[] nextZones = new int[keepCount];
             int[] nextReceivers = new int[keepCount];
+            int[] nextOwners = new int[keepCount];
             int[] nextEpochs = new int[keepCount];
             int[] nextSequences = new int[keepCount];
             int write = 0;
             for (int i = 0; i < receivePlayerIds.Length; i++)
             {
-                if (receivePlayerIds[i] == removedPlayerId)
+                if (receivePlayerIds[i] == removedPlayerId || receiveOwnerIds[i] == removedPlayerId)
                     continue;
                 nextPlayers[write] = receivePlayerIds[i];
                 nextZones[write] = receiveZoneIds[i];
                 nextReceivers[write] = receiveReceiverIds[i];
+                nextOwners[write] = receiveOwnerIds[i];
                 nextEpochs[write] = receiveEpochs[i];
                 nextSequences[write] = receiveSequences[i];
                 write++;
@@ -495,6 +677,7 @@ namespace UdonSharp
             receivePlayerIds = nextPlayers;
             receiveZoneIds = nextZones;
             receiveReceiverIds = nextReceivers;
+            receiveOwnerIds = nextOwners;
             receiveEpochs = nextEpochs;
             receiveSequences = nextSequences;
         }
@@ -550,6 +733,9 @@ namespace UdonSharp
 
         private void SendFieldSnapshot(int receiverId, UdonBehaviour receiver, int zoneId, VRCPlayerApi player)
         {
+            int ownerId = GetReceiverOwnerId(receiverId, receiver);
+            if (ownerId < -1)
+                return;
             LCGNetworkZone zone = FindZone(zoneId);
             int epoch = zone != null ? zone.Epoch : 0;
             for (int i = 0; i < packetAddresses.Length; i++)
@@ -561,16 +747,19 @@ namespace UdonSharp
                 byte[] frame = BuildFieldFrame(receiverId, zoneId, epoch, sequence++, packetValueTypes[i],
                     packetAddresses[i], value);
                 if (frame != null)
+                {
+                    WriteInt32(frame, 24, ownerId);
                     SendFrame(player, frame);
+                }
             }
         }
 
-        private bool AcceptSequence(int playerId, int zoneId, int receiverId, int frameEpoch, int frameSequence)
+        private bool AcceptSequence(int playerId, int zoneId, int receiverId, int ownerId, int frameEpoch, int frameSequence)
         {
             for (int i = 0; i < receivePlayerIds.Length; i++)
             {
                 if (receivePlayerIds[i] != playerId || receiveZoneIds[i] != zoneId ||
-                    receiveReceiverIds[i] != receiverId)
+                    receiveReceiverIds[i] != receiverId || receiveOwnerIds[i] != ownerId)
                     continue;
                 if (frameEpoch < receiveEpochs[i] ||
                     (frameEpoch == receiveEpochs[i] && frameSequence <= receiveSequences[i]))
@@ -584,6 +773,7 @@ namespace UdonSharp
             int[] nextPlayers = new int[length + 1];
             int[] nextZones = new int[length + 1];
             int[] nextReceivers = new int[length + 1];
+            int[] nextOwners = new int[length + 1];
             int[] nextEpochs = new int[length + 1];
             int[] nextSequences = new int[length + 1];
             for (int i = 0; i < length; i++)
@@ -591,6 +781,7 @@ namespace UdonSharp
                 nextPlayers[i] = receivePlayerIds[i];
                 nextZones[i] = receiveZoneIds[i];
                 nextReceivers[i] = receiveReceiverIds[i];
+                nextOwners[i] = receiveOwnerIds[i];
                 nextEpochs[i] = receiveEpochs[i];
                 nextSequences[i] = receiveSequences[i];
             }
@@ -598,11 +789,13 @@ namespace UdonSharp
             nextPlayers[length] = playerId;
             nextZones[length] = zoneId;
             nextReceivers[length] = receiverId;
+            nextOwners[length] = ownerId;
             nextEpochs[length] = frameEpoch;
             nextSequences[length] = frameSequence;
             receivePlayerIds = nextPlayers;
             receiveZoneIds = nextZones;
             receiveReceiverIds = nextReceivers;
+            receiveOwnerIds = nextOwners;
             receiveEpochs = nextEpochs;
             receiveSequences = nextSequences;
             return true;
@@ -629,6 +822,7 @@ namespace UdonSharp
             byte[] frame = new byte[HeaderSize];
             frame[0] = ProtocolVersion;
             frame[1] = 2;
+            WriteInt32(frame, 24, -1);
             WriteInt32(frame, 4, zoneId);
             WriteInt32(frame, 8, epoch);
             WriteInt32(frame, 12, receiverId);
@@ -650,6 +844,7 @@ namespace UdonSharp
             byte[] frame = new byte[frameLength];
             frame[0] = ProtocolVersion;
             frame[1] = 0; // field state
+            WriteInt32(frame, 24, -1);
             frame[2] = (byte)typeTag;
             WriteInt32(frame, 4, zoneId);
             WriteInt32(frame, 8, epoch);
@@ -662,21 +857,21 @@ namespace UdonSharp
             return frame;
         }
 
-        private static int FindFieldKey(int[] receiverIds, int[] zoneIds, string[] addresses, int count,
-            int receiverId, int zoneId, string address)
+        private static int FindFieldKey(int[] receiverIds, int[] ownerIds, int[] zoneIds, string[] addresses, int count,
+            int receiverId, int ownerId, int zoneId, string address)
         {
             for (int i = 0; i < count; i++)
             {
-                if (receiverIds[i] == receiverId && zoneIds[i] == zoneId && addresses[i] == address)
+                if (receiverIds[i] == receiverId && ownerIds[i] == ownerId && zoneIds[i] == zoneId && addresses[i] == address)
                     return i;
             }
             return -1;
         }
 
-        private void RememberSentField(int receiverId, int zoneId, string address, byte[] payload)
+        private void RememberSentField(int receiverId, int ownerId, int zoneId, string address, byte[] payload)
         {
-            int index = FindFieldKey(sentFieldReceiverIds, sentFieldZoneIds, sentFieldAddresses, sentFieldCount,
-                receiverId, zoneId, address);
+            int index = FindFieldKey(sentFieldReceiverIds, sentFieldOwnerIds, sentFieldZoneIds, sentFieldAddresses, sentFieldCount,
+                receiverId, ownerId, zoneId, address);
             if (index < 0)
             {
                 if (sentFieldCount >= MaxPendingFieldPackets)
@@ -684,6 +879,7 @@ namespace UdonSharp
                 else
                     index = sentFieldCount++;
                 sentFieldReceiverIds[index] = receiverId;
+                sentFieldOwnerIds[index] = ownerId;
                 sentFieldZoneIds[index] = zoneId;
                 sentFieldAddresses[index] = address;
             }
@@ -723,6 +919,7 @@ namespace UdonSharp
             byte[] frame = new byte[frameLength];
             frame[0] = ProtocolVersion;
             frame[1] = 1;
+            WriteInt32(frame, 24, -1);
             frame[2] = (byte)argumentCount;
             WriteInt32(frame, 4, zoneId);
             WriteInt32(frame, 8, epoch);
@@ -785,12 +982,12 @@ namespace UdonSharp
         private static byte[] EncodeValue(int typeTag, object value)
         {
             if ((typeTag & (int)LCGPacketType.ArrayFlag) != 0)
-                return EncodeArray(typeTag & ~(int)LCGPacketType.ArrayFlag, value as Array);
+                return EncodeArray(typeTag & ~(int)LCGPacketType.ArrayFlag, value != null && value.GetType().IsArray ? (Array)value : null);
 
             switch ((LCGPacketType)typeTag)
             {
                 case LCGPacketType.Boolean: return new[] { (bool)value ? (byte)1 : (byte)0 };
-                case LCGPacketType.SByte: return new[] { unchecked((byte)(sbyte)value) };
+                case LCGPacketType.SByte: return new[] { (byte)((sbyte)value & 255) };
                 case LCGPacketType.Byte: return new[] { (byte)value };
                 case LCGPacketType.Int16: return BitConverter.GetBytes((short)value);
                 case LCGPacketType.UInt16: return BitConverter.GetBytes((ushort)value);
@@ -830,7 +1027,9 @@ namespace UdonSharp
             {
                 case LCGPacketType.Boolean:
                     return length == 1 && data[offset] <= 1 ? data[offset] != 0 : (object)null;
-                case LCGPacketType.SByte: return length == 1 ? unchecked((sbyte)data[offset]) : (object)null;
+                case LCGPacketType.SByte: return length == 1
+                    ? (sbyte)(data[offset] < 128 ? (int)data[offset] : data[offset] - 256)
+                    : (object)null;
                 case LCGPacketType.Byte: return length == 1 ? data[offset] : (object)null;
                 case LCGPacketType.Int16: return length == 2 ? BitConverter.ToInt16(data, offset) : (object)null;
                 case LCGPacketType.UInt16: return length == 2 ? BitConverter.ToUInt16(data, offset) : (object)null;
@@ -956,8 +1155,8 @@ namespace UdonSharp
             for (int i = 0; i < characters.Length; i++)
             {
                 int character = characters[i];
-                bytes[i * 2] = (byte)character;
-                bytes[i * 2 + 1] = (byte)(character >> 8);
+                bytes[i * 2] = (byte)(character & 255);
+                bytes[i * 2 + 1] = (byte)((character >> 8) & 255);
             }
             return bytes;
         }
@@ -996,45 +1195,19 @@ namespace UdonSharp
 
         private static void WriteUInt16(byte[] data, int offset, int value)
         {
-            data[offset] = (byte)value;
-            data[offset + 1] = (byte)(value >> 8);
+            data[offset] = (byte)(value & 255);
+            data[offset + 1] = (byte)((value >> 8) & 255);
         }
 
         private static void WriteInt32(byte[] data, int offset, int value)
         {
-            data[offset] = (byte)value;
-            data[offset + 1] = (byte)(value >> 8);
-            data[offset + 2] = (byte)(value >> 16);
-            data[offset + 3] = (byte)(value >> 24);
+            // Udon lowers casts to checked Convert.ToByte externs. Mask each
+            // lane first so negative markers and values above 255 cannot throw.
+            data[offset] = (byte)(value & 255);
+            data[offset + 1] = (byte)((value >> 8) & 255);
+            data[offset + 2] = (byte)((value >> 16) & 255);
+            data[offset + 3] = (byte)((value >> 24) & 255);
         }
     }
 
-    /// <summary>
-    /// Per-player mailbox. VRChat clones this PlayerObject and owns the clone for that player.
-    /// </summary>
-    [PublicAPI]
-    [UdonBehaviourSyncMode(BehaviourSyncMode.NoVariableSync)]
-    public sealed class LCGRuntimePlayer : UdonSharpBehaviour
-    {
-        [SerializeField] private LCGRuntime runtime;
-
-        internal void Configure(LCGRuntime sceneRuntime)
-        {
-            runtime = sceneRuntime;
-        }
-
-        [NetworkCallable(100)]
-        public void ReceiveFrame(byte[] frame)
-        {
-            if (runtime == null || !Networking.IsOwner(gameObject))
-                return;
-
-            runtime.ReceiveFrame(frame, NetworkCalling.CallingPlayer);
-        }
-
-        public override bool OnOwnershipRequest(VRCPlayerApi requestingPlayer, VRCPlayerApi requestedOwner)
-        {
-            return false;
-        }
-    }
 }

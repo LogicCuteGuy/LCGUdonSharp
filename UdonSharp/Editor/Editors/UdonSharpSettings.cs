@@ -70,6 +70,7 @@ public class <TemplateClassName> : UdonSharpBehaviour
         public bool buildDebugInfo = true;
         public bool includeInlineCode = true;
         public bool listenForVRCExceptions = true;
+        public bool lcgNetworkDiagnostics = false;
 
         public bool shouldForceCompile = false;
 
@@ -281,6 +282,9 @@ Disabling this setting will make the UNITY_EDITOR define not work as expected an
 
                     // Debugging settings
                     EditorGUILayout.LabelField("Debugging", EditorStyles.boldLabel);
+
+                    EditorGUILayout.PropertyField(settingsObject.FindProperty(nameof(UdonSharpSettings.lcgNetworkDiagnostics)),
+                        new GUIContent("LCG network diagnostics", "Compile LCG pickup and packet delivery logs into Udon programs. Off removes the diagnostic code. Recompile UdonSharp programs after changing this setting."));
 
                     EditorGUILayout.PropertyField(settingsObject.FindProperty(nameof(UdonSharpSettings.buildDebugInfo)), _includeDebugInfoLabel);
 

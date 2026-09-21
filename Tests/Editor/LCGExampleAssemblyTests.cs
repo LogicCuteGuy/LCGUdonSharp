@@ -1,6 +1,10 @@
 using System.IO;
+using System.Collections.Generic;
+using System.Reflection;
+using System.Text.RegularExpressions;
 using NUnit.Framework;
 using UdonSharp.Compiler;
+using UdonSharpEditor;
 using UnityEditor;
 using UnityEditor.Compilation;
 using UnityEngine;
@@ -50,10 +54,55 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer.Tests
         }
 
         [Test]
-        public void ManualObjectSyncExample_CompilesThroughUdonSharp()
+        public void NetworkingExamples_CompileThroughUdonSharp()
         {
             UdonSharpCompilerV1.CompileSync(new UdonSharpCompileOptions { IsEditorBuild = true });
             LogAssert.NoUnexpectedReceived();
+            Assert.That(UdonSharp.UdonSharpProgramAsset.AnyUdonSharpScriptHasError(), Is.False,
+                "Networking examples must complete Udon assembly generation, not just C# binding.");
+        }
+
+        [TestCase("LCGRuntime")]
+        [TestCase("LCGRuntimePlayer")]
+        [TestCase("LCGNetworkZone")]
+        [TestCase("LCGZoneOwnershipGuard")]
+        [TestCase("LCGManualObjectSync")]
+        public void RuntimeBehaviour_HasMatchingMonoScript(string className)
+        {
+            string path = "Packages/com.logiccuteguy.lcgudonsharp/UdonSharp/Runtime/LCGBehaviours/" + className + ".cs";
+            MonoScript script = AssetDatabase.LoadAssetAtPath<MonoScript>(path);
+            Assert.That(script, Is.Not.Null, path);
+            System.Type scriptClass = script.GetClass();
+            Assert.That(scriptClass, Is.Not.Null, path + " must resolve to a Unity script class.");
+            Assert.That(scriptClass.Name, Is.EqualTo(className));
+            Assert.That(typeof(UdonSharp.UdonSharpBehaviour).IsAssignableFrom(scriptClass), Is.True);
+        }
+
+        [Test]
+        public void RuntimeEnumSwitch_DoesNotCopyByteIntoInt32()
+        {
+            UdonSharpCompilerV1.CompileSync(new UdonSharpCompileOptions { IsEditorBuild = true });
+            Assert.That(UdonSharp.UdonSharpProgramAsset.AnyUdonSharpScriptHasError(), Is.False);
+            var asset = AssetDatabase.LoadAssetAtPath<UdonSharp.UdonSharpProgramAsset>(
+                "Packages/com.logiccuteguy.lcgudonsharp/UdonSharp/Runtime/LCGBehaviours/LCGRuntime.asset");
+            Assert.That(asset, Is.Not.Null);
+            var cacheType = typeof(UdonSharpEditorUtility).Assembly.GetType("UdonSharp.UdonSharpEditorCache");
+            var cache = cacheType.GetProperty("Instance", BindingFlags.Public | BindingFlags.Static).GetValue(null);
+            string assembly = (string)cacheType.GetMethod("GetUASMStr").Invoke(cache, new object[] { asset });
+            Assert.That(assembly, Does.Contain("SystemUInt32Array.__Get__SystemInt32__SystemUInt32"),
+                "This regression requires the runtime's compiled enum switch jump tables.");
+            Assert.That(assembly, Does.Contain("SystemConvert.__ToInt32__SystemByte__SystemInt32"));
+
+            var types = new Dictionary<string, string>();
+            foreach (Match declaration in Regex.Matches(assembly, @"(?m)^\s*(\w+): %(\w+),"))
+                types[declaration.Groups[1].Value] = declaration.Groups[2].Value;
+            foreach (Match copy in Regex.Matches(assembly, @"PUSH, (\w+)\s+PUSH, (\w+)\s+COPY"))
+            {
+                string source = copy.Groups[1].Value;
+                string target = copy.Groups[2].Value;
+                Assert.That(types[source] == "SystemByte" && types[target] == "SystemInt32", Is.False,
+                    "Byte-backed enums must be converted, not copied, into integer slots: " + copy.Value);
+            }
         }
     }
 }

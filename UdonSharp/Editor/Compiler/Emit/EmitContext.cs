@@ -290,6 +290,8 @@ namespace UdonSharp.Compiler.Emit
                 .First(method => method.Parameters.Length == 1 && method.Parameters[0].Type == stringType);
             BoundAccessExpression runtimeAccess = BoundAccessExpression.BindAccess(_lcgRuntimeValue);
 
+            EmitRuntimeRegister(setProgramVariable, runtimeAccess, "__lcgSenderReceiver",
+                BoundAccessExpression.BindAccess(GetUdonThisValue(udonBehaviourType)));
             EmitRuntimeRegister(setProgramVariable, runtimeAccess, "__lcgSenderReceiverId",
                 BoundAccessExpression.BindAccess(_lcgReceiverIdValue));
             EmitRuntimeRegister(setProgramVariable, runtimeAccess, "__lcgSenderZoneId",
@@ -322,7 +324,8 @@ namespace UdonSharp.Compiler.Emit
                 .First(method => method.Parameters.Length == 2 && method.Parameters[0].Type == stringType &&
                                  method.Parameters[1].Type == objectType);
             MethodSymbol getProgramVariable = udonBehaviourType.GetMembers<MethodSymbol>("GetProgramVariable", this)
-                .First(method => method.Parameters.Length == 1 && method.Parameters[0].Type == stringType);
+                .First(method => !method.IsGenericMethod && method.Parameters.Length == 1 &&
+                                 method.Parameters[0].Type == stringType && method.ReturnType == objectType);
             MethodSymbol sendCustomEvent = udonBehaviourType.GetMembers<MethodSymbol>("SendCustomEvent", this)
                 .First(method => method.Parameters.Length == 1 && method.Parameters[0].Type == stringType);
 
@@ -340,6 +343,7 @@ namespace UdonSharp.Compiler.Emit
                     BoundAccessExpression.BindAccess(GetConstantValue(stringType, "__lcgZoneId"))
                 });
 
+            EmitRuntimeRegister(setProgramVariable, runtimeAccess, "__lcgSenderReceiver", receiverAccess);
             EmitRuntimeRegister(setProgramVariable, runtimeAccess, "__lcgSenderReceiverId", receiverIdRead);
             EmitRuntimeRegister(setProgramVariable, runtimeAccess, "__lcgSenderZoneId", zoneIdRead);
             EmitRuntimeRegister(setProgramVariable, runtimeAccess, "__lcgSenderAddress",
@@ -736,7 +740,12 @@ namespace UdonSharp.Compiler.Emit
 
                 // Integer -> user enum
                 // User enum -> user enum
-                if (UdonSharpUtils.IsIntegerType(sourceType.UdonType.SystemType) && !targetType.IsExtern && targetType.IsEnum)
+                // User enum -> numeric type (including switch jump-table indices).
+                // User enums live on the heap as their underlying numeric type; COPY
+                // alone cannot widen a byte-backed enum into an Int32 heap value.
+                if ((UdonSharpUtils.IsIntegerType(sourceType.UdonType.SystemType) && !targetType.IsExtern && targetType.IsEnum) ||
+                    (!sourceType.IsExtern && sourceType.IsEnum && !targetType.IsEnum &&
+                     UdonSharpUtils.IsNumericType(targetType.UdonType.SystemType)))
                 {
                     if (sourceType.UdonType == targetType.UdonType)
                     {

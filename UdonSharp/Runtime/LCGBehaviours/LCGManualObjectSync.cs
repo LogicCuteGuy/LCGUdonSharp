@@ -32,6 +32,48 @@ namespace UdonSharp
         [SerializeField, HideInInspector] private Quaternion defaultRotation;
         [SerializeField, HideInInspector] private bool defaultActive;
         [HideInInspector] public VRCPlayerApi __lcgPacketSender;
+        private bool pickupMotionActive;
+        private bool pickupHeld;
+        private float nextPickupSyncTime;
+
+        public override void OnPickup()
+        {
+#if LCG_NETWORK_DIAGNOSTICS
+            Debug.Log("[LCG sync] Pickup " + gameObject.name + ": owner=" + Networking.IsOwner(gameObject) +
+                ", insideZone=" + (zone != null && zone.Contains(Networking.LocalPlayer)));
+#endif
+            pickupHeld = true;
+            pickupMotionActive = true;
+            nextPickupSyncTime = 0f;
+        }
+
+        public override void OnDrop()
+        {
+            pickupHeld = false;
+            // Send on the next LateUpdate, after pickup physics has been restored.
+            pickupMotionActive = true;
+            nextPickupSyncTime = 0f;
+        }
+
+        private void LateUpdate()
+        {
+            if (!pickupMotionActive)
+                return;
+            if (!Networking.IsOwner(gameObject))
+            {
+                pickupMotionActive = false;
+                pickupHeld = false;
+                return;
+            }
+            if (Time.time < nextPickupSyncTime)
+                return;
+
+            nextPickupSyncTime = Time.time + 0.1f;
+            RequestObjectSync();
+            Rigidbody body = GetComponent<Rigidbody>();
+            if (!pickupHeld && (body == null || body.isKinematic || body.IsSleeping()))
+                pickupMotionActive = false;
+        }
 
         internal void Configure(LCGRuntime sceneRuntime, LCGNetworkZone networkZone, int id)
         {
@@ -62,7 +104,10 @@ namespace UdonSharp
         {
             if (runtime == null || !Utilities.IsValid(player) || zone == null || !zone.Contains(player))
                 return;
-            SendCustomNetworkEvent(NetworkEventTarget.Owner, nameof(RequestSnapshot));
+            if (Networking.IsOwner(gameObject))
+                SendState(NetworkEventTarget.Self, player, true);
+            else if (player.isLocal)
+                SendCustomNetworkEvent(NetworkEventTarget.Owner, nameof(RequestSnapshot));
         }
 
         [LCGPacket(Authority = LCGPacketAuthority.Any)]

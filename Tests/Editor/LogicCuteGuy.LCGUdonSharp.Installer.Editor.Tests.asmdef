@@ -5,13 +5,25 @@
     "LogicCuteGuy.LCGUdonSharp.Installer.Editor",
     "UdonSharp.Runtime",
     "LogicCuteGuy.LCGUdonSharp.Runtime",
-    "UdonSharp.Editor"
+    "UdonSharp.Editor",
+    "VRC.Udon.Editor",
+    "VRC.Udon"
   ],
   "includePlatforms": [
     "Editor"
   ],
   "optionalUnityReferences": [
     "TestAssemblies"
+  ],
+  "overrideReferences": true,
+  "precompiledReferences": [
+    "nunit.framework.dll",
+    "Microsoft.CodeAnalysis.dll",
+    "Microsoft.CodeAnalysis.CSharp.dll",
+    "System.Collections.Immutable.dll",
+    "VRCSDK3.dll",
+    "VRCSDKBase.dll",
+    "VRC.Udon.Common.dll"
   ],
   "autoReferenced": false,
   "noEngineReferences": false
