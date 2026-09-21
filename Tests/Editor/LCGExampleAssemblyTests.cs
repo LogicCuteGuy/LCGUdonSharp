@@ -19,6 +19,8 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer.Tests
         private const string UdonSharpAssemblyPath =
             "Packages/com.logiccuteguy.lcgudonsharp/Example/LogicCuteGuy.LCGUdonSharp.Examples.USharp.asset";
         private const string ExpectedAssemblyName = "LogicCuteGuy.LCGUdonSharp.Examples";
+        private const string GenericRestrictionsGuidePath =
+            "Packages/com.logiccuteguy.lcgudonsharp/Example/GenericRestrictions/README.md";
 
         private static readonly string[] ExampleScriptPaths =
         {
@@ -26,6 +28,52 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer.Tests
             "Packages/com.logiccuteguy.lcgudonsharp/Example/LCGPacketMethodShowcase.cs",
             "Packages/com.logiccuteguy.lcgudonsharp/Example/LCGZoneObjectShowcase.cs",
         };
+
+        [Test]
+        public void GenericRestrictionsGuide_HasEverySectionAndBadGoodPair()
+        {
+            Assert.That(File.Exists(GenericRestrictionsGuidePath), Is.True,
+                "The generic restriction example guide is missing.");
+
+            string guide = File.ReadAllText(GenericRestrictionsGuidePath);
+            string[] restrictionSections =
+            {
+                "## Open generics",
+                "## Generic behaviours",
+                "## Generic heap objects",
+                "## List<T>",
+                "## Unsupported interface members",
+                "## Multiple concrete bases",
+            };
+
+            foreach (string section in restrictionSections)
+            {
+                int sectionStart = guide.IndexOf(section, System.StringComparison.Ordinal);
+                Assert.That(sectionStart, Is.GreaterThanOrEqualTo(0), section + " example is missing.");
+
+                int sectionEnd = guide.IndexOf("\n## ", sectionStart + section.Length,
+                    System.StringComparison.Ordinal);
+                if (sectionEnd < 0)
+                    sectionEnd = guide.Length;
+
+                string sectionBody = guide.Substring(sectionStart, sectionEnd - sectionStart);
+                Assert.That(sectionBody, Does.Contain("**Rejected**"),
+                    section + " needs a clearly labelled rejected example.");
+                Assert.That(sectionBody, Does.Contain("**Replacement**"),
+                    section + " needs a clearly labelled replacement example.");
+            }
+
+            string[] requiredTopics =
+            {
+                "## Task<T> compatibility note",
+                "Static generic helpers",
+                "Closed generic interfaces",
+                "Composition",
+            };
+
+            foreach (string topic in requiredTopics)
+                Assert.That(guide, Does.Contain(topic), topic + " example is missing.");
+        }
 
         [Test]
         public void ExampleAssembly_IsRegisteredAsUdonSharpAssembly()
