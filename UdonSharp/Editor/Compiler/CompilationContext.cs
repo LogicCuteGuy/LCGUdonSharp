@@ -1635,6 +1635,13 @@ namespace UdonSharp.Compiler.Lowering
                 Delay,
                 StringLoad,
                 ImageLoad,
+                VideoLoad,
+                VideoEnd,
+                GpuReadback,
+                Serialization,
+                AvailableProducts,
+                Purchases,
+                ProductOwners,
             }
 
             private sealed class AwaitLowering
@@ -1652,6 +1659,8 @@ namespace UdonSharp.Compiler.Lowering
                 internal int ExpectedState;
                 internal string PendingFieldName;
                 internal FieldDeclarationSyntax PendingField;
+                internal string AuxiliaryFieldName;
+                internal FieldDeclarationSyntax AuxiliaryField;
             }
 
             private readonly Func<ClassDeclarationSyntax, bool> _shouldRewriteClass;
@@ -1678,6 +1687,7 @@ namespace UdonSharp.Compiler.Lowering
                 var sdkDispatches = new List<SdkAwaitDispatch>();
                 var reservedNames = new HashSet<string>(visited.Members.SelectMany(GetDeclaredMemberNames),
                     StringComparer.Ordinal);
+                bool usesManualSync = UsesManualSync(node);
 
                 for (int memberIndex = 0; memberIndex < visited.Members.Count; memberIndex++)
                 {
@@ -1690,7 +1700,7 @@ namespace UdonSharp.Compiler.Lowering
                     }
 
                     MethodDeclarationSyntax semanticMethod = node.Members[memberIndex] as MethodDeclarationSyntax;
-                    if (!TryRewriteMethod(method, semanticMethod, reservedNames, sdkDispatches,
+                    if (!TryRewriteMethod(method, semanticMethod, reservedNames, sdkDispatches, usesManualSync,
                             out MethodDeclarationSyntax entryMethod,
                             out FieldDeclarationSyntax stateField, out MethodDeclarationSyntax resumeMethod))
                     {
@@ -1711,8 +1721,16 @@ namespace UdonSharp.Compiler.Lowering
 
                 foreach (SdkAwaitDispatch dispatch in sdkDispatches)
                 {
-                    reservedNames.Add(dispatch.PendingFieldName);
-                    members.Add(dispatch.PendingField);
+                    if (dispatch.PendingField != null)
+                    {
+                        reservedNames.Add(dispatch.PendingFieldName);
+                        members.Add(dispatch.PendingField);
+                    }
+                    if (dispatch.AuxiliaryField != null)
+                    {
+                        reservedNames.Add(dispatch.AuxiliaryFieldName);
+                        members.Add(dispatch.AuxiliaryField);
+                    }
                 }
 
                 WeaveSdkCallbacks(members, sdkDispatches);
@@ -1722,7 +1740,7 @@ namespace UdonSharp.Compiler.Lowering
 
             private bool TryRewriteMethod(MethodDeclarationSyntax method,
                 MethodDeclarationSyntax semanticMethod, HashSet<string> reservedNames,
-                List<SdkAwaitDispatch> sdkDispatches,
+                List<SdkAwaitDispatch> sdkDispatches, bool usesManualSync,
                 out MethodDeclarationSyntax entryMethod, out FieldDeclarationSyntax stateField,
                 out MethodDeclarationSyntax resumeMethod)
             {
@@ -1808,11 +1826,13 @@ namespace UdonSharp.Compiler.Lowering
 
                     if (!TryClassifyAwait(awaitExpression.Expression, out AwaitLowering awaitLowering))
                         return Fail(awaitExpression,
-                            "Only Task.Yield(), Task.Delay(positive constant milliseconds), VRCAsync.LoadStringAsync(), and VRCAsync.LoadImageAsync() can currently be awaited in Udon.");
+                            "Only Task.Yield(), Task.Delay(positive constant milliseconds), and supported VRCAsync SDK helpers can currently be awaited in Udon.");
 
-                    if (awaitLowering.Kind == AwaitKind.StringLoad ||
-                        awaitLowering.Kind == AwaitKind.ImageLoad)
+                    if (IsSdkAwait(awaitLowering.Kind))
                     {
+                        if (awaitLowering.Kind == AwaitKind.Serialization && !usesManualSync)
+                            return Fail(awaitExpression,
+                                "RequestSerializationAsync requires [UdonBehaviourSyncMode(BehaviourSyncMode.Manual)].");
                         if (sdkDispatches.Count + sdkAwaitCount > 0)
                             return Fail(awaitExpression,
                                 "Only one pending VRChat SDK await is supported per behaviour in this callback-lowering slice.");
@@ -1868,10 +1888,22 @@ namespace UdonSharp.Compiler.Lowering
                             .WithSections(SyntaxFactory.List(sections))));
                 foreach (SdkAwaitDispatch dispatch in methodSdkDispatches)
                 {
-                    reservedNames.Add(dispatch.PendingFieldName);
+                    if (!string.IsNullOrEmpty(dispatch.PendingFieldName))
+                        reservedNames.Add(dispatch.PendingFieldName);
+                    if (!string.IsNullOrEmpty(dispatch.AuxiliaryFieldName))
+                        reservedNames.Add(dispatch.AuxiliaryFieldName);
                     sdkDispatches.Add(dispatch);
                 }
                 return true;
+            }
+
+            private bool UsesManualSync(ClassDeclarationSyntax declaration)
+            {
+                INamedTypeSymbol type = _semanticModel?.GetDeclaredSymbol(declaration);
+                AttributeData syncMode = type?.GetAttributes().FirstOrDefault(attribute =>
+                    attribute.AttributeClass?.ToDisplayString() == "UdonSharp.UdonBehaviourSyncModeAttribute");
+                return syncMode != null && syncMode.ConstructorArguments.Length == 1 &&
+                       syncMode.ConstructorArguments[0].Value is int value && value == 4;
             }
 
             private bool AppendSchedule(List<StatementSyntax> statements, string stateName,
@@ -1889,12 +1921,15 @@ namespace UdonSharp.Compiler.Lowering
                     return true;
                 }
 
-                string pendingFieldName = $"{stateName}_{(awaitLowering.Kind == AwaitKind.StringLoad ? "stringUrl" : "imageRequest")}";
-                if (reservedNames.Contains(pendingFieldName))
+                string pendingSuffix = GetPendingSuffix(awaitLowering.Kind);
+                string pendingFieldName = pendingSuffix == null ? null : $"{stateName}_{pendingSuffix}";
+                if (pendingFieldName != null && reservedNames.Contains(pendingFieldName))
                     return Fail(awaitLowering.Invocation,
                         $"SDK await conflicts with compiler-generated member '{pendingFieldName}'.");
 
-                FieldDeclarationSyntax pendingField;
+                FieldDeclarationSyntax pendingField = null;
+                string auxiliaryFieldName = null;
+                FieldDeclarationSyntax auxiliaryField = null;
                 if (awaitLowering.Kind == AwaitKind.StringLoad)
                 {
                     ExpressionSyntax url = GetArgument(awaitLowering.Invocation, "url", 0);
@@ -1908,7 +1943,7 @@ namespace UdonSharp.Compiler.Lowering
                         $"VRC.SDK3.StringLoading.VRCStringDownloader.LoadUrl({pendingFieldName}, " +
                         "(VRC.Udon.Common.Interfaces.IUdonEventReceiver)this);"));
                 }
-                else
+                else if (awaitLowering.Kind == AwaitKind.ImageLoad)
                 {
                     ExpressionSyntax downloader = GetArgument(awaitLowering.Invocation,
                         "downloader", 0);
@@ -1927,9 +1962,96 @@ namespace UdonSharp.Compiler.Lowering
                         $"{pendingFieldName} = ({downloader}).DownloadImage({url}, {material}, " +
                         $"(VRC.Udon.Common.Interfaces.IUdonEventReceiver)this, {textureInfo});"));
                 }
+                else if (awaitLowering.Kind == AwaitKind.VideoLoad)
+                {
+                    ExpressionSyntax player = GetArgument(awaitLowering.Invocation, "player", 0);
+                    ExpressionSyntax url = GetArgument(awaitLowering.Invocation, "url", 1);
+                    ExpressionSyntax playWhenReady = GetArgument(awaitLowering.Invocation,
+                        "playWhenReady", 2) ?? SyntaxFactory.LiteralExpression(SyntaxKind.FalseLiteralExpression);
+                    if (player == null || url == null)
+                        return Fail(awaitLowering.Invocation, "LoadVideoAsync requires player and URL arguments.");
+                    pendingField = (FieldDeclarationSyntax)SyntaxFactory.ParseMemberDeclaration(
+                        $"[System.NonSerialized] private VRC.SDK3.Video.Components.Base.BaseVRCVideoPlayer {pendingFieldName};");
+                    auxiliaryFieldName = $"{stateName}_playWhenReady";
+                    if (reservedNames.Contains(auxiliaryFieldName))
+                        return Fail(awaitLowering.Invocation,
+                            $"SDK await conflicts with compiler-generated member '{auxiliaryFieldName}'.");
+                    auxiliaryField = (FieldDeclarationSyntax)SyntaxFactory.ParseMemberDeclaration(
+                        $"[System.NonSerialized] private bool {auxiliaryFieldName};");
+                    statements.Add(SyntaxFactory.ParseStatement($"{pendingFieldName} = {player};"));
+                    statements.Add(SyntaxFactory.ParseStatement($"{auxiliaryFieldName} = {playWhenReady};"));
+                    statements.Add(SyntaxFactory.ParseStatement($"{stateName} = {nextState};"));
+                    statements.Add(SyntaxFactory.ParseStatement($"{pendingFieldName}.LoadURL({url});"));
+                }
+                else if (awaitLowering.Kind == AwaitKind.VideoEnd)
+                {
+                    ExpressionSyntax player = GetArgument(awaitLowering.Invocation, "player", 0);
+                    if (player == null)
+                        return Fail(awaitLowering.Invocation, "WaitForVideoEndAsync requires a player argument.");
+                    pendingField = (FieldDeclarationSyntax)SyntaxFactory.ParseMemberDeclaration(
+                        $"[System.NonSerialized] private VRC.SDK3.Video.Components.Base.BaseVRCVideoPlayer {pendingFieldName};");
+                    statements.Add(SyntaxFactory.ParseStatement($"{pendingFieldName} = {player};"));
+                    statements.Add(SyntaxFactory.ParseStatement($"{stateName} = {nextState};"));
+                }
+                else if (awaitLowering.Kind == AwaitKind.GpuReadback)
+                {
+                    ExpressionSyntax source = GetArgument(awaitLowering.Invocation, "source", 0);
+                    ExpressionSyntax mipIndex = GetArgument(awaitLowering.Invocation,
+                        "mipIndex", 1) ?? SyntaxFactory.LiteralExpression(SyntaxKind.NumericLiteralExpression,
+                        SyntaxFactory.Literal(0));
+                    if (source == null)
+                        return Fail(awaitLowering.Invocation, "RequestGPUReadbackAsync requires a source texture.");
+                    pendingField = (FieldDeclarationSyntax)SyntaxFactory.ParseMemberDeclaration(
+                        $"[System.NonSerialized] private VRC.SDK3.Rendering.VRCAsyncGPUReadbackRequest {pendingFieldName};");
+                    statements.Add(SyntaxFactory.ParseStatement($"{stateName} = {nextState};"));
+                    statements.Add(SyntaxFactory.ParseStatement(
+                        $"{pendingFieldName} = VRC.SDK3.Rendering.VRCAsyncGPUReadback.Request({source}, {mipIndex}, " +
+                        "(VRC.Udon.Common.Interfaces.IUdonEventReceiver)this);"));
+                }
+                else if (awaitLowering.Kind == AwaitKind.Serialization)
+                {
+                    statements.Add(SyntaxFactory.ParseStatement(
+                        $"if (!VRC.SDKBase.Networking.IsOwner(gameObject)) " +
+                        $"{{ UnityEngine.Debug.LogError(\"RequestSerializationAsync requires local ownership.\"); {stateName} = 0; return; }}"));
+                    statements.Add(SyntaxFactory.ParseStatement($"{stateName} = {nextState};"));
+                    statements.Add(SyntaxFactory.ParseStatement("RequestSerialization();"));
+                }
+                else if (awaitLowering.Kind == AwaitKind.AvailableProducts)
+                {
+                    statements.Add(SyntaxFactory.ParseStatement($"{stateName} = {nextState};"));
+                    statements.Add(SyntaxFactory.ParseStatement(
+                        "VRC.Economy.Store.ListAvailableProducts((VRC.Udon.Common.Interfaces.IUdonEventReceiver)this);"));
+                }
+                else if (awaitLowering.Kind == AwaitKind.Purchases)
+                {
+                    ExpressionSyntax player = GetArgument(awaitLowering.Invocation, "player", 0);
+                    if (player == null)
+                        return Fail(awaitLowering.Invocation, "ListPurchasesAsync requires a player argument.");
+                    pendingField = (FieldDeclarationSyntax)SyntaxFactory.ParseMemberDeclaration(
+                        $"[System.NonSerialized] private VRC.SDKBase.VRCPlayerApi {pendingFieldName};");
+                    statements.Add(SyntaxFactory.ParseStatement($"{pendingFieldName} = {player};"));
+                    statements.Add(SyntaxFactory.ParseStatement($"{stateName} = {nextState};"));
+                    statements.Add(SyntaxFactory.ParseStatement(
+                        $"VRC.Economy.Store.ListPurchases((VRC.Udon.Common.Interfaces.IUdonEventReceiver)this, {pendingFieldName});"));
+                }
+                else if (awaitLowering.Kind == AwaitKind.ProductOwners)
+                {
+                    ExpressionSyntax product = GetArgument(awaitLowering.Invocation, "product", 0);
+                    if (product == null)
+                        return Fail(awaitLowering.Invocation, "ListProductOwnersAsync requires a product argument.");
+                    pendingField = (FieldDeclarationSyntax)SyntaxFactory.ParseMemberDeclaration(
+                        $"[System.NonSerialized] private VRC.Economy.IProduct {pendingFieldName};");
+                    statements.Add(SyntaxFactory.ParseStatement($"{pendingFieldName} = {product};"));
+                    statements.Add(SyntaxFactory.ParseStatement($"{stateName} = {nextState};"));
+                    statements.Add(SyntaxFactory.ParseStatement(
+                        $"VRC.Economy.Store.ListProductOwners((VRC.Udon.Common.Interfaces.IUdonEventReceiver)this, {pendingFieldName});"));
+                }
 
                 statements.Add(SyntaxFactory.ParseStatement("return;"));
-                reservedNames.Add(pendingFieldName);
+                if (pendingFieldName != null)
+                    reservedNames.Add(pendingFieldName);
+                if (auxiliaryFieldName != null)
+                    reservedNames.Add(auxiliaryFieldName);
                 sdkDispatches.Add(new SdkAwaitDispatch
                 {
                     Kind = awaitLowering.Kind,
@@ -1938,6 +2060,8 @@ namespace UdonSharp.Compiler.Lowering
                     ExpectedState = nextState,
                     PendingFieldName = pendingFieldName,
                     PendingField = pendingField,
+                    AuxiliaryFieldName = auxiliaryFieldName,
+                    AuxiliaryField = auxiliaryField,
                 });
                 return true;
             }
@@ -1989,6 +2113,12 @@ namespace UdonSharp.Compiler.Lowering
                             { Kind = AwaitKind.ImageLoad, Invocation = invocation };
                         return true;
                     }
+                    if (containingType == "UdonSharp.VRCAsync" &&
+                        TryGetSdkAwaitKind(method.Name, out AwaitKind sdkKind))
+                    {
+                        awaitLowering = new AwaitLowering { Kind = sdkKind, Invocation = invocation };
+                        return true;
+                    }
 
                     return false;
                 }
@@ -2015,6 +2145,43 @@ namespace UdonSharp.Compiler.Lowering
                 return false;
             }
 
+            private static bool TryGetSdkAwaitKind(string methodName, out AwaitKind kind)
+            {
+                switch (methodName)
+                {
+                    case "LoadStringAsync": kind = AwaitKind.StringLoad; return true;
+                    case "LoadImageAsync": kind = AwaitKind.ImageLoad; return true;
+                    case "LoadVideoAsync": kind = AwaitKind.VideoLoad; return true;
+                    case "WaitForVideoEndAsync": kind = AwaitKind.VideoEnd; return true;
+                    case "RequestGPUReadbackAsync": kind = AwaitKind.GpuReadback; return true;
+                    case "RequestSerializationAsync": kind = AwaitKind.Serialization; return true;
+                    case "ListAvailableProductsAsync": kind = AwaitKind.AvailableProducts; return true;
+                    case "ListPurchasesAsync": kind = AwaitKind.Purchases; return true;
+                    case "ListProductOwnersAsync": kind = AwaitKind.ProductOwners; return true;
+                    default:
+                        kind = default;
+                        return false;
+                }
+            }
+
+            private static bool IsSdkAwait(AwaitKind kind) =>
+                kind != AwaitKind.Yield && kind != AwaitKind.Delay;
+
+            private static string GetPendingSuffix(AwaitKind kind)
+            {
+                switch (kind)
+                {
+                    case AwaitKind.StringLoad: return "stringUrl";
+                    case AwaitKind.ImageLoad: return "imageRequest";
+                    case AwaitKind.VideoLoad:
+                    case AwaitKind.VideoEnd: return "videoPlayer";
+                    case AwaitKind.GpuReadback: return "gpuRequest";
+                    case AwaitKind.Purchases: return "purchasesPlayer";
+                    case AwaitKind.ProductOwners: return "ownersProduct";
+                    default: return null;
+                }
+            }
+
             private static ExpressionSyntax GetArgument(InvocationExpressionSyntax invocation,
                 string parameterName, int positionalIndex)
             {
@@ -2036,32 +2203,28 @@ namespace UdonSharp.Compiler.Lowering
             {
                 foreach (SdkAwaitDispatch dispatch in dispatches)
                 {
-                    string[] callbackNames = dispatch.Kind == AwaitKind.StringLoad
-                        ? new[] { "OnStringLoadSuccess", "OnStringLoadError" }
-                        : new[] { "OnImageLoadSuccess", "OnImageLoadError" };
-                    string parameterType = dispatch.Kind == AwaitKind.StringLoad
-                        ? "VRC.SDK3.StringLoading.IVRCStringDownload"
-                        : "VRC.SDK3.Image.IVRCImageDownload";
-
-                    foreach (string callbackName in callbackNames)
+                    foreach (string callbackName in GetCallbackNames(dispatch.Kind))
                     {
+                        string[] parameterTypes = GetCallbackParameterTypes(dispatch.Kind, callbackName);
+                        string[] generatedParameterNames = GetCallbackParameterNames(dispatch.Kind, callbackName);
                         int existingIndex = members.FindIndex(member =>
                             member is MethodDeclarationSyntax method &&
                             method.Identifier.ValueText == callbackName);
-                        string parameterName = "result";
+                        string[] parameterNames = generatedParameterNames;
                         StatementSyntax dispatchStatement;
                         if (existingIndex >= 0)
                         {
                             var existing = (MethodDeclarationSyntax)members[existingIndex];
-                            if (existing.ParameterList.Parameters.Count != 1)
+                            if (existing.ParameterList.Parameters.Count != parameterTypes.Length)
                             {
                                 Diagnostics.Add(new AsyncSyntaxLoweringDiagnostic(existing,
-                                    $"Legacy callback '{callbackName}' must have exactly one SDK result parameter."));
+                                    $"Legacy callback '{callbackName}' has the wrong SDK parameter count."));
                                 continue;
                             }
 
-                            parameterName = existing.ParameterList.Parameters[0].Identifier.ValueText;
-                            dispatchStatement = CreateSdkDispatchStatement(dispatch, parameterName);
+                            parameterNames = existing.ParameterList.Parameters
+                                .Select(parameter => parameter.Identifier.ValueText).ToArray();
+                            dispatchStatement = CreateSdkDispatchStatement(dispatch, callbackName, parameterNames);
                             BlockSyntax body = existing.Body;
                             if (body == null && existing.ExpressionBody != null)
                                 body = SyntaxFactory.Block(SyntaxFactory.ExpressionStatement(
@@ -2085,15 +2248,19 @@ namespace UdonSharp.Compiler.Lowering
                         }
                         else
                         {
-                            dispatchStatement = CreateSdkDispatchStatement(dispatch, parameterName);
+                            dispatchStatement = CreateSdkDispatchStatement(dispatch, callbackName, parameterNames);
+                            var parameters = new List<ParameterSyntax>();
+                            for (int i = 0; i < parameterTypes.Length; i++)
+                            {
+                                parameters.Add(SyntaxFactory.Parameter(SyntaxFactory.Identifier(parameterNames[i]))
+                                    .WithType(SyntaxFactory.ParseTypeName(parameterTypes[i])));
+                            }
                             var generated = SyntaxFactory.MethodDeclaration(
                                     SyntaxFactory.ParseTypeName("void"), callbackName)
                                 .AddModifiers(SyntaxFactory.Token(SyntaxKind.PublicKeyword),
                                     SyntaxFactory.Token(SyntaxKind.OverrideKeyword))
                                 .WithParameterList(SyntaxFactory.ParameterList(
-                                    SyntaxFactory.SingletonSeparatedList(
-                                        SyntaxFactory.Parameter(SyntaxFactory.Identifier(parameterName))
-                                            .WithType(SyntaxFactory.ParseTypeName(parameterType)))))
+                                    SyntaxFactory.SeparatedList(parameters)))
                                 .WithBody(SyntaxFactory.Block(dispatchStatement));
                             members.Add(generated);
                         }
@@ -2102,14 +2269,103 @@ namespace UdonSharp.Compiler.Lowering
             }
 
             private static StatementSyntax CreateSdkDispatchStatement(SdkAwaitDispatch dispatch,
-                string parameterName)
+                string callbackName, string[] parameterNames)
             {
-                string match = dispatch.Kind == AwaitKind.StringLoad
-                    ? $"{parameterName}.Url.Get() == {dispatch.PendingFieldName}.Get()"
-                    : $"{parameterName} == {dispatch.PendingFieldName}";
+                string match;
+                switch (dispatch.Kind)
+                {
+                    case AwaitKind.StringLoad:
+                        match = $"{parameterNames[0]}.Url.Get() == {dispatch.PendingFieldName}.Get()";
+                        break;
+                    case AwaitKind.ImageLoad:
+                    case AwaitKind.GpuReadback:
+                        match = $"{parameterNames[0]} == {dispatch.PendingFieldName}";
+                        break;
+                    case AwaitKind.Purchases:
+                        match = $"{parameterNames[1]} == {dispatch.PendingFieldName}";
+                        break;
+                    case AwaitKind.ProductOwners:
+                        match = $"{parameterNames[0]} == {dispatch.PendingFieldName}";
+                        break;
+                    default:
+                        match = "true";
+                        break;
+                }
+
+                var actions = new List<string>();
+                if (dispatch.Kind == AwaitKind.VideoLoad && callbackName == "OnVideoReady")
+                    actions.Add($"if ({dispatch.AuxiliaryFieldName}) {dispatch.PendingFieldName}.Play();");
+                if (dispatch.AuxiliaryFieldName != null)
+                    actions.Add($"{dispatch.AuxiliaryFieldName} = false;");
+                if (dispatch.PendingFieldName != null)
+                    actions.Add($"{dispatch.PendingFieldName} = null;");
+                actions.Add($"{dispatch.ResumeName}();");
                 return SyntaxFactory.ParseStatement(
                     $"if ({dispatch.StateName} == {dispatch.ExpectedState} && {match}) " +
-                    $"{{ {dispatch.PendingFieldName} = null; {dispatch.ResumeName}(); }}");
+                    $"{{ {string.Join(" ", actions)} }}");
+            }
+
+            private static string[] GetCallbackNames(AwaitKind kind)
+            {
+                switch (kind)
+                {
+                    case AwaitKind.StringLoad: return new[] { "OnStringLoadSuccess", "OnStringLoadError" };
+                    case AwaitKind.ImageLoad: return new[] { "OnImageLoadSuccess", "OnImageLoadError" };
+                    case AwaitKind.VideoLoad: return new[] { "OnVideoReady", "OnVideoError" };
+                    case AwaitKind.VideoEnd: return new[] { "OnVideoEnd", "OnVideoError" };
+                    case AwaitKind.GpuReadback: return new[] { "OnAsyncGpuReadbackComplete" };
+                    case AwaitKind.Serialization: return new[] { "OnPostSerialization" };
+                    case AwaitKind.AvailableProducts: return new[] { "OnListAvailableProducts" };
+                    case AwaitKind.Purchases: return new[] { "OnListPurchases" };
+                    case AwaitKind.ProductOwners: return new[] { "OnListProductOwners" };
+                    default: return Array.Empty<string>();
+                }
+            }
+
+            private static string[] GetCallbackParameterTypes(AwaitKind kind, string callbackName)
+            {
+                switch (kind)
+                {
+                    case AwaitKind.StringLoad:
+                        return new[] { "VRC.SDK3.StringLoading.IVRCStringDownload" };
+                    case AwaitKind.ImageLoad:
+                        return new[] { "VRC.SDK3.Image.IVRCImageDownload" };
+                    case AwaitKind.VideoLoad:
+                    case AwaitKind.VideoEnd:
+                        return callbackName == "OnVideoError"
+                            ? new[] { "VRC.SDK3.Components.Video.VideoError" }
+                            : Array.Empty<string>();
+                    case AwaitKind.GpuReadback:
+                        return new[] { "VRC.SDK3.Rendering.VRCAsyncGPUReadbackRequest" };
+                    case AwaitKind.Serialization:
+                        return new[] { "VRC.Udon.Common.SerializationResult" };
+                    case AwaitKind.AvailableProducts:
+                        return new[] { "VRC.Economy.IProduct[]" };
+                    case AwaitKind.Purchases:
+                        return new[] { "VRC.Economy.IProduct[]", "VRC.SDKBase.VRCPlayerApi" };
+                    case AwaitKind.ProductOwners:
+                        return new[] { "VRC.Economy.IProduct", "string[]" };
+                    default:
+                        return Array.Empty<string>();
+                }
+            }
+
+            private static string[] GetCallbackParameterNames(AwaitKind kind, string callbackName)
+            {
+                switch (kind)
+                {
+                    case AwaitKind.StringLoad:
+                    case AwaitKind.ImageLoad: return new[] { "result" };
+                    case AwaitKind.VideoLoad:
+                    case AwaitKind.VideoEnd:
+                        return callbackName == "OnVideoError" ? new[] { "videoError" } : Array.Empty<string>();
+                    case AwaitKind.GpuReadback: return new[] { "request" };
+                    case AwaitKind.Serialization: return new[] { "result" };
+                    case AwaitKind.AvailableProducts: return new[] { "products" };
+                    case AwaitKind.Purchases: return new[] { "products", "player" };
+                    case AwaitKind.ProductOwners: return new[] { "product", "owners" };
+                    default: return Array.Empty<string>();
+                }
             }
 
             private static ulong GetStableTypeHash(INamedTypeSymbol type)

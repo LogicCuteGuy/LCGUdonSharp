@@ -6,7 +6,13 @@ This folder contains real U# examples for the build-time async lowering:
 - `AsyncStringDownloadExample` awaits `VRCAsync.LoadStringAsync` while keeping
   the traditional `OnStringLoadSuccess`/`OnStringLoadError` callbacks;
 - `AsyncImageDownloadExample` awaits `VRCAsync.LoadImageAsync` while keeping
-  the traditional image callbacks.
+  the traditional image callbacks;
+- `AsyncVideoLoadExample` and `AsyncVideoEndExample` cover video readiness,
+  errors, and playback completion;
+- `AsyncGpuReadbackExample` covers `VRCAsyncGPUReadback`;
+- `AsyncSerializationExample` keeps both serialization callbacks;
+- `AsyncAvailableProductsExample`, `AsyncPurchasesExample`, and
+  `AsyncProductOwnersExample` cover Creator Economy list operations.
 
 Add an example to a GameObject with its generated Udon program, assign its URL
 and (for images) target material, enter the world, and interact with it.
@@ -17,8 +23,8 @@ Currently supported in this slice:
 - straight-line `await Task.Yield();` statements;
 - straight-line `await Task.Delay(milliseconds);` statements where milliseconds
   is a positive compile-time constant;
-- one `VRCAsync.LoadStringAsync(...)` or `VRCAsync.LoadImageAsync(...)` await per
-  behaviour.
+- one VRChat SDK await per behaviour, including string/image downloads, video,
+  GPU readback, manual serialization, and Creator Economy list operations.
 
 For SDK awaits, the traditional callback body runs first and receives the SDK
 result. The generated await continuation runs afterward. This initial slice
@@ -31,7 +37,11 @@ correlated by the returned `IVRCImageDownload` request identity. Each async
 method is single-flight: another call while its continuation is pending is
 ignored.
 
+Video callbacks do not identify their source player, so do not start a manual
+video operation on the same behaviour while a video await is pending. Keep the
+video player and awaiting behaviour on the same GameObject. Economy list
+operations have no SDK error callback and can therefore remain pending.
+
 Locals, parameters, nested awaits, explicit returns, direct `Task<T>` result
-assignment, video/GPU/serialization/economy adapters, and multiple simultaneous
-SDK awaits still produce build diagnostics until their later lowering slices
-are implemented.
+assignment and multiple simultaneous SDK awaits still produce build diagnostics
+until their later frame-pool lowering slices are implemented.

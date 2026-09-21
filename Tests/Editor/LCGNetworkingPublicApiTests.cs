@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.Serialization;
@@ -242,7 +243,8 @@ public class Sample
             Compiler.Lowering.AsyncSyntaxLoweringResult result = RewriteAsyncWithSemantics(source);
             string lowered = result.Tree.GetRoot().NormalizeWhitespace().ToFullString();
 
-            Assert.That(result.Diagnostics, Is.Empty);
+            Assert.That(result.Diagnostics, Is.Empty,
+                string.Join(" | ", result.Diagnostics.Select(diagnostic => diagnostic.Message)));
             Assert.That(lowered, Does.Not.Contain("async void"));
             Assert.That(lowered, Does.Not.Contain("await "));
             Assert.That(lowered, Does.Contain("SendCustomEventDelayedFrames"));
@@ -375,7 +377,7 @@ public class Derived : Base
         {
             SyntaxTree source = CSharpSyntaxTree.ParseText(@"
 using System.Threading.Tasks;
-namespace VRC.SDKBase { public class VRCUrl { public string Get() => ""; } }
+namespace VRC.SDKBase { public class VRCUrl { public string Get() => """"; } }
 namespace VRC.Udon.Common.Interfaces { public interface IUdonEventReceiver { } }
 namespace VRC.SDK3.StringLoading
 {
@@ -408,7 +410,8 @@ public class Sample : VRC.Udon.Common.Interfaces.IUdonEventReceiver
 
             Compiler.Lowering.AsyncSyntaxLoweringResult result = RewriteAsyncWithSemantics(source);
             string lowered = result.Tree.GetRoot().ToFullString();
-            Assert.That(result.Diagnostics, Is.Empty);
+            Assert.That(result.Diagnostics, Is.Empty,
+                string.Join(" | ", result.Diagnostics.Select(diagnostic => diagnostic.Message)));
             Assert.That(lowered, Does.Contain("VRCStringDownloader.LoadUrl"));
             Assert.That(lowered, Does.Contain("result.Url.Get() == __uasync_"));
             Assert.That(lowered.IndexOf("Legacy();", StringComparison.Ordinal),
@@ -466,6 +469,171 @@ public class Sample : VRC.Udon.Common.Interfaces.IUdonEventReceiver
             Assert.That(lowered.IndexOf("Legacy();", StringComparison.Ordinal),
                 Is.LessThan(lowered.LastIndexOf("_resume();", StringComparison.Ordinal)));
             Assert.That(lowered, Does.Not.Contain("await UdonSharp.VRCAsync"));
+        }
+
+        [Test]
+        public void AsyncLowering_LowersVideoGpuSerializationAndEconomyAdapters()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System.Threading.Tasks;
+namespace UdonSharp
+{
+    public enum BehaviourSyncMode { Manual = 4 }
+    [System.AttributeUsage(System.AttributeTargets.Class)]
+    public sealed class UdonBehaviourSyncModeAttribute : System.Attribute
+    {
+        public UdonBehaviourSyncModeAttribute(BehaviourSyncMode mode) { }
+    }
+    public static class VRCAsync
+    {
+        public static Task<object> LoadVideoAsync(object player, object url, bool playWhenReady = false) => null;
+        public static Task<object> WaitForVideoEndAsync(object player) => null;
+        public static Task<object> RequestGPUReadbackAsync(object source, int mipIndex = 0) => null;
+        public static Task<object> RequestSerializationAsync() => null;
+        public static Task<object> ListAvailableProductsAsync() => null;
+        public static Task<object> ListPurchasesAsync(object player) => null;
+        public static Task<object> ListProductOwnersAsync(object product) => null;
+    }
+}
+public class VideoLoad
+{
+    private object player, url;
+    public async void Run() { await UdonSharp.VRCAsync.LoadVideoAsync(player, url, true); Continued(); }
+    public void OnVideoReady() { Legacy(); }
+    public void OnVideoError(object error) { Legacy(); }
+    private void Legacy() { } private void Continued() { }
+}
+public class VideoEnd
+{
+    private object player;
+    public async void Run() { await UdonSharp.VRCAsync.WaitForVideoEndAsync(player); Continued(); }
+    public void OnVideoEnd() { Legacy(); }
+    public void OnVideoError(object error) { Legacy(); }
+    private void Legacy() { } private void Continued() { }
+}
+public class Gpu
+{
+    private object source;
+    public async void Run() { await UdonSharp.VRCAsync.RequestGPUReadbackAsync(source); Continued(); }
+    public void OnAsyncGpuReadbackComplete(object request) { Legacy(); }
+    private void Legacy() { } private void Continued() { }
+}
+[UdonSharp.UdonBehaviourSyncMode(UdonSharp.BehaviourSyncMode.Manual)]
+public class Serialization
+{
+    public async void Run() { await UdonSharp.VRCAsync.RequestSerializationAsync(); Continued(); }
+    public void OnPostSerialization(object result) { Legacy(); }
+    private void Legacy() { } private void Continued() { }
+}
+public class Available
+{
+    public async void Run() { await UdonSharp.VRCAsync.ListAvailableProductsAsync(); Continued(); }
+    public void OnListAvailableProducts(object products) { Legacy(); }
+    private void Legacy() { } private void Continued() { }
+}
+public class Purchases
+{
+    private object player;
+    public async void Run() { await UdonSharp.VRCAsync.ListPurchasesAsync(player); Continued(); }
+    public void OnListPurchases(object products, object callbackPlayer) { Legacy(); }
+    private void Legacy() { } private void Continued() { }
+}
+public class Owners
+{
+    private object product;
+    public async void Run() { await UdonSharp.VRCAsync.ListProductOwnersAsync(product); Continued(); }
+    public void OnListProductOwners(object callbackProduct, object owners) { Legacy(); }
+    private void Legacy() { } private void Continued() { }
+}
+");
+
+            Compiler.Lowering.AsyncSyntaxLoweringResult result = RewriteAsyncWithSemantics(source);
+            string lowered = result.Tree.GetRoot().ToFullString();
+            Assert.That(result.Diagnostics, Is.Empty);
+            Assert.That(lowered, Does.Contain(".LoadURL("));
+            Assert.That(lowered, Does.Contain(".Play();"));
+            Assert.That(lowered, Does.Contain("VRCAsyncGPUReadback.Request"));
+            Assert.That(lowered, Does.Contain("RequestSerialization();"));
+            Assert.That(lowered, Does.Contain("Store.ListAvailableProducts"));
+            Assert.That(lowered, Does.Contain("Store.ListPurchases"));
+            Assert.That(lowered, Does.Contain("Store.ListProductOwners"));
+            Assert.That(lowered, Does.Not.Contain("await UdonSharp.VRCAsync"));
+        }
+
+        [Test]
+        public void AsyncLowering_RealSdkExamplesProduceValidLoweredCSharp()
+        {
+            string[] examplePaths =
+            {
+                "Packages/com.logiccuteguy.lcgudonsharp/Example/AsyncAwait/AsyncStringDownloadExample.cs",
+                "Packages/com.logiccuteguy.lcgudonsharp/Example/AsyncAwait/AsyncImageDownloadExample.cs",
+                "Packages/com.logiccuteguy.lcgudonsharp/Example/AsyncAwait/AsyncVideoLoadExample.cs",
+                "Packages/com.logiccuteguy.lcgudonsharp/Example/AsyncAwait/AsyncVideoEndExample.cs",
+                "Packages/com.logiccuteguy.lcgudonsharp/Example/AsyncAwait/AsyncGpuReadbackExample.cs",
+                "Packages/com.logiccuteguy.lcgudonsharp/Example/AsyncAwait/AsyncSerializationExample.cs",
+                "Packages/com.logiccuteguy.lcgudonsharp/Example/AsyncAwait/AsyncAvailableProductsExample.cs",
+                "Packages/com.logiccuteguy.lcgudonsharp/Example/AsyncAwait/AsyncPurchasesExample.cs",
+                "Packages/com.logiccuteguy.lcgudonsharp/Example/AsyncAwait/AsyncProductOwnersExample.cs",
+            };
+            MetadataReference[] references = new[]
+                {
+                    typeof(object).Assembly.Location,
+                    Path.Combine(Path.GetDirectoryName(typeof(object).Assembly.Location),
+                        "Facades", "netstandard.dll"),
+                    typeof(Task).Assembly.Location,
+                    typeof(UnityEngine.Debug).Assembly.Location,
+                    typeof(UdonSharpBehaviour).Assembly.Location,
+                    typeof(VRC.SDKBase.VRCUrl).Assembly.Location,
+                    typeof(VRC.SDK3.Image.VRCImageDownloader).Assembly.Location,
+                    typeof(VRC.Udon.Common.SerializationResult).Assembly.Location,
+                    typeof(VRC.Udon.Serialization.OdinSerializer.ISupportsPrefabSerialization).Assembly.Location,
+                    Path.GetFullPath("Packages/com.vrchat.worlds/Runtime/VRCSDK/Plugins/VRCEconomy.dll"),
+                }
+                .Distinct()
+                .Select(location => MetadataReference.CreateFromFile(location))
+                .ToArray();
+
+            foreach (string examplePath in examplePaths)
+            {
+                SyntaxTree tree = CSharpSyntaxTree.ParseText(File.ReadAllText(examplePath), path: examplePath);
+                CSharpCompilation compilation = CSharpCompilation.Create("RealSdkAsyncExample", new[] { tree },
+                    references, new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+                Compiler.Lowering.AsyncSyntaxLoweringResult result =
+                    Compiler.Lowering.AsyncSyntaxLowerer.Rewrite(tree, declaration => true,
+                        compilation.GetSemanticModel(tree));
+
+                Assert.That(result.Diagnostics, Is.Empty, examplePath + ": " +
+                    string.Join(" | ", result.Diagnostics.Select(diagnostic => diagnostic.Message)));
+                Assert.That(result.Tree.GetRoot().DescendantNodes().OfType<Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax>(),
+                    Is.Empty, examplePath);
+
+                CSharpCompilation loweredCompilation = compilation.ReplaceSyntaxTree(tree, result.Tree);
+                Assert.That(loweredCompilation.GetDiagnostics()
+                        .Where(diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error),
+                    Is.Empty, examplePath);
+            }
+        }
+
+        [Test]
+        public void AsyncLowering_RejectsSerializationAwaitWithoutManualSyncMode()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System.Threading.Tasks;
+namespace UdonSharp
+{
+    public static class VRCAsync
+    {
+        public static Task<object> RequestSerializationAsync() => null;
+    }
+}
+public class NotManual
+{
+    public async void Run() { await UdonSharp.VRCAsync.RequestSerializationAsync(); }
+}");
+
+            Compiler.Lowering.AsyncSyntaxLoweringResult result = RewriteAsyncWithSemantics(source);
+            Assert.That(result.Diagnostics.Select(diagnostic => diagnostic.Message),
+                Has.Some.Contains("BehaviourSyncMode.Manual"));
         }
 
         [Test]

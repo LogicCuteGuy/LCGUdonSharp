@@ -28,6 +28,13 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer.Tests
         {
             "Packages/com.logiccuteguy.lcgudonsharp/Example/AsyncAwait/AsyncStringDownloadExample.cs",
             "Packages/com.logiccuteguy.lcgudonsharp/Example/AsyncAwait/AsyncImageDownloadExample.cs",
+            "Packages/com.logiccuteguy.lcgudonsharp/Example/AsyncAwait/AsyncVideoLoadExample.cs",
+            "Packages/com.logiccuteguy.lcgudonsharp/Example/AsyncAwait/AsyncVideoEndExample.cs",
+            "Packages/com.logiccuteguy.lcgudonsharp/Example/AsyncAwait/AsyncGpuReadbackExample.cs",
+            "Packages/com.logiccuteguy.lcgudonsharp/Example/AsyncAwait/AsyncSerializationExample.cs",
+            "Packages/com.logiccuteguy.lcgudonsharp/Example/AsyncAwait/AsyncAvailableProductsExample.cs",
+            "Packages/com.logiccuteguy.lcgudonsharp/Example/AsyncAwait/AsyncPurchasesExample.cs",
+            "Packages/com.logiccuteguy.lcgudonsharp/Example/AsyncAwait/AsyncProductOwnersExample.cs",
         };
 
         private static readonly string[] ExtendedLanguageExamplePaths =
@@ -153,11 +160,23 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer.Tests
                 string assembly = (string)getUasm.Invoke(cache, new object[] { programAsset });
                 Assert.That(assembly, Does.Contain("_interact"));
                 Assert.That(assembly, Does.Contain("_Interact_resume"));
-                Assert.That(assembly, Does.Contain(scriptPath.Contains("String") ? "LoadUrl" : "DownloadImage"));
-                Assert.That(assembly, Does.Contain(scriptPath.Contains("String")
-                    ? "_onStringLoadSuccess"
-                    : "_onImageLoadSuccess"));
+                GetAsyncSdkMarkers(scriptPath, out string operationMarker, out string callbackMarker);
+                Assert.That(assembly, Does.Contain(operationMarker));
+                Assert.That(assembly, Does.Contain(callbackMarker));
             }
+        }
+
+        private static void GetAsyncSdkMarkers(string scriptPath, out string operation, out string callback)
+        {
+            if (scriptPath.Contains("String")) { operation = "LoadUrl"; callback = "_onStringLoadSuccess"; }
+            else if (scriptPath.Contains("Image")) { operation = "DownloadImage"; callback = "_onImageLoadSuccess"; }
+            else if (scriptPath.Contains("VideoLoad")) { operation = "LoadURL"; callback = "_onVideoReady"; }
+            else if (scriptPath.Contains("VideoEnd")) { operation = "_Interact_resume"; callback = "_onVideoEnd"; }
+            else if (scriptPath.Contains("Gpu")) { operation = "VRCAsyncGPUReadback"; callback = "_onAsyncGpuReadbackComplete"; }
+            else if (scriptPath.Contains("Serialization")) { operation = "RequestSerialization"; callback = "_onPostSerialization"; }
+            else if (scriptPath.Contains("AvailableProducts")) { operation = "ListAvailableProducts"; callback = "_onListAvailableProducts"; }
+            else if (scriptPath.Contains("Purchases")) { operation = "ListPurchases"; callback = "_onListPurchases"; }
+            else { operation = "ListProductOwners"; callback = "_onListProductOwners"; }
         }
 
         [Test]
