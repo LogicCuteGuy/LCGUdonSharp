@@ -2,6 +2,7 @@
 using System;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -46,6 +47,7 @@ namespace UdonSharp.Compiler
         public BindContext binding;
         public string assembly;
         public Lowering.ExtendedLoweringPlan loweringPlan;
+        public bool asyncSyntaxLowered;
     }
     
     internal class CompilationContext
@@ -783,6 +785,348 @@ namespace UdonSharp.Compiler
 
 namespace UdonSharp.Compiler.Lowering
 {
+    internal sealed class AsyncSyntaxLoweringDiagnostic
+    {
+        internal SyntaxNode Node { get; }
+        internal string Message { get; }
+
+        internal AsyncSyntaxLoweringDiagnostic(SyntaxNode node, string message)
+        {
+            Node = node;
+            Message = message;
+        }
+    }
+
+    internal sealed class AsyncSyntaxLoweringResult
+    {
+        internal SyntaxTree Tree { get; }
+        internal ImmutableArray<AsyncSyntaxLoweringDiagnostic> Diagnostics { get; }
+        internal bool Changed { get; }
+
+        internal AsyncSyntaxLoweringResult(SyntaxTree tree,
+            ImmutableArray<AsyncSyntaxLoweringDiagnostic> diagnostics, bool changed)
+        {
+            Tree = tree;
+            Diagnostics = diagnostics;
+            Changed = changed;
+        }
+    }
+
+    /// <summary>
+    /// Performs the syntax portion of async lowering before the regular U# binder sees the program.
+    /// This first vertical slice intentionally accepts only straight-line async-void methods using
+    /// Task.Yield() and Task.Delay(int); unsupported shapes are diagnosed instead of leaking an
+    /// AwaitExpression into the binder.
+    /// </summary>
+    internal static class AsyncSyntaxLowerer
+    {
+        internal static AsyncSyntaxLoweringResult Rewrite(SyntaxTree tree)
+        {
+            return Rewrite(tree, null, null);
+        }
+
+        internal static AsyncSyntaxLoweringResult Rewrite(SyntaxTree tree,
+            Func<ClassDeclarationSyntax, bool> shouldRewriteClass)
+        {
+            return Rewrite(tree, shouldRewriteClass, null);
+        }
+
+        internal static AsyncSyntaxLoweringResult Rewrite(SyntaxTree tree,
+            Func<ClassDeclarationSyntax, bool> shouldRewriteClass, SemanticModel semanticModel)
+        {
+            var rewriter = new AsyncMethodRewriter(shouldRewriteClass, semanticModel);
+            SyntaxNode root = rewriter.Visit(tree.GetRoot());
+            SyntaxTree rewrittenTree = rewriter.Changed
+                ? tree.WithRootAndOptions(root, tree.Options)
+                : tree;
+            return new AsyncSyntaxLoweringResult(rewrittenTree,
+                rewriter.Diagnostics.ToImmutableArray(), rewriter.Changed);
+        }
+
+        private sealed class AsyncMethodRewriter : CSharpSyntaxRewriter
+        {
+            private readonly Func<ClassDeclarationSyntax, bool> _shouldRewriteClass;
+            private readonly SemanticModel _semanticModel;
+
+            internal AsyncMethodRewriter(Func<ClassDeclarationSyntax, bool> shouldRewriteClass,
+                SemanticModel semanticModel)
+            {
+                _shouldRewriteClass = shouldRewriteClass;
+                _semanticModel = semanticModel;
+            }
+
+            internal List<AsyncSyntaxLoweringDiagnostic> Diagnostics { get; } =
+                new List<AsyncSyntaxLoweringDiagnostic>();
+            internal bool Changed { get; private set; }
+
+            public override SyntaxNode VisitClassDeclaration(ClassDeclarationSyntax node)
+            {
+                var visited = (ClassDeclarationSyntax)base.VisitClassDeclaration(node);
+                if (_shouldRewriteClass != null && !_shouldRewriteClass(node))
+                    return visited;
+
+                var members = new List<MemberDeclarationSyntax>();
+                var reservedNames = new HashSet<string>(visited.Members.SelectMany(GetDeclaredMemberNames),
+                    StringComparer.Ordinal);
+
+                for (int memberIndex = 0; memberIndex < visited.Members.Count; memberIndex++)
+                {
+                    MemberDeclarationSyntax member = visited.Members[memberIndex];
+                    if (!(member is MethodDeclarationSyntax method) ||
+                        !method.Modifiers.Any(SyntaxKind.AsyncKeyword))
+                    {
+                        members.Add(member);
+                        continue;
+                    }
+
+                    MethodDeclarationSyntax semanticMethod = node.Members[memberIndex] as MethodDeclarationSyntax;
+                    if (!TryRewriteMethod(method, semanticMethod, reservedNames,
+                            out MethodDeclarationSyntax entryMethod,
+                            out FieldDeclarationSyntax stateField, out MethodDeclarationSyntax resumeMethod))
+                    {
+                        members.Add(member);
+                        continue;
+                    }
+
+                    Changed = true;
+                    reservedNames.Add(stateField.Declaration.Variables[0].Identifier.ValueText);
+                    members.Add(stateField);
+                    members.Add(entryMethod);
+                    if (resumeMethod != null)
+                    {
+                        reservedNames.Add(resumeMethod.Identifier.ValueText);
+                        members.Add(resumeMethod);
+                    }
+                }
+
+                return visited.WithMembers(SyntaxFactory.List(members));
+            }
+
+            private bool TryRewriteMethod(MethodDeclarationSyntax method,
+                MethodDeclarationSyntax semanticMethod, HashSet<string> reservedNames,
+                out MethodDeclarationSyntax entryMethod, out FieldDeclarationSyntax stateField,
+                out MethodDeclarationSyntax resumeMethod)
+            {
+                entryMethod = null;
+                stateField = null;
+                resumeMethod = null;
+                IMethodSymbol semanticSymbol = _semanticModel != null && semanticMethod != null
+                    ? _semanticModel.GetDeclaredSymbol(semanticMethod)
+                    : null;
+
+                if (!(method.ReturnType is PredefinedTypeSyntax returnType) ||
+                    !returnType.Keyword.IsKind(SyntaxKind.VoidKeyword))
+                    return Fail(method, "Only async void methods are supported by the current Udon async lowerer.");
+                if (method.Modifiers.Any(SyntaxKind.StaticKeyword))
+                    return Fail(method, "Static async Udon methods are not supported.");
+                if (method.TypeParameterList != null)
+                    return Fail(method.TypeParameterList, "Generic async Udon methods are not supported.");
+                if (method.Body == null)
+                    return Fail(method, "Async expression-bodied methods are not supported.");
+                if (method.ParameterList.Parameters.Count != 0)
+                    return Fail(method.ParameterList, "Async Udon methods with parameters are not supported yet.");
+                if (method.Body.DescendantNodes().OfType<ReturnStatementSyntax>().Any())
+                    return Fail(method.Body, "Explicit return statements in async Udon methods are not supported yet.");
+                if (method.Body.DescendantNodes().Any(node =>
+                        node is VariableDeclarationSyntax ||
+                        node is DeclarationExpressionSyntax ||
+                        node is SingleVariableDesignationSyntax ||
+                        node is ForEachStatementSyntax ||
+                        node is ForEachVariableStatementSyntax ||
+                        node is CatchDeclarationSyntax))
+                    return Fail(method.Body, "Locals in async Udon methods are not supported until frame hoisting is enabled.");
+
+                var topLevelAwaits = method.Body.Statements
+                    .OfType<ExpressionStatementSyntax>()
+                    .Where(statement => statement.Expression is AwaitExpressionSyntax)
+                    .ToArray();
+                int allAwaitCount = method.Body.DescendantNodes().OfType<AwaitExpressionSyntax>().Count();
+                if (topLevelAwaits.Length != allAwaitCount)
+                    return Fail(method.Body, "Await must currently be a top-level statement in an async Udon method.");
+
+                string methodKey = semanticSymbol == null
+                    ? method.Identifier.ValueText
+                    : $"{GetStableTypeHash(semanticSymbol.ContainingType):x16}_{method.Identifier.ValueText}";
+                string stateName = $"__uasync_{methodKey}_state";
+                string resumeName = $"__uasync_{methodKey}_resume";
+                if (reservedNames.Contains(stateName) || reservedNames.Contains(resumeName))
+                    return Fail(method,
+                        $"Async method '{method.Identifier.ValueText}' conflicts with compiler-generated member names.");
+
+                if (semanticSymbol != null && semanticSymbol.GetAttributes().Any(attribute =>
+                    {
+                        string attributeName = attribute.AttributeClass?.ToDisplayString();
+                        return attributeName == "VRC.SDK3.UdonNetworkCalling.NetworkCallableAttribute" ||
+                               attributeName == "UdonSharp.LCGPacketAttribute";
+                    }))
+                    return Fail(method,
+                        $"Network callable method '{method.Identifier.ValueText}' cannot be async.");
+
+                stateField = (FieldDeclarationSyntax)SyntaxFactory.ParseMemberDeclaration(
+                    $"[System.NonSerialized] private int {stateName};");
+
+                SyntaxTokenList modifiers = SyntaxFactory.TokenList(method.Modifiers
+                    .Where(modifier => !modifier.IsKind(SyntaxKind.AsyncKeyword)));
+
+                if (topLevelAwaits.Length == 0)
+                {
+                    entryMethod = method.WithModifiers(modifiers);
+                    resumeMethod = null;
+                    return true;
+                }
+
+                var segments = new List<List<StatementSyntax>> { new List<StatementSyntax>() };
+                var awaitKinds = new List<(bool IsDelay, ExpressionSyntax DelayMilliseconds)>();
+                foreach (StatementSyntax statement in method.Body.Statements)
+                {
+                    if (!(statement is ExpressionStatementSyntax expressionStatement) ||
+                        !(expressionStatement.Expression is AwaitExpressionSyntax awaitExpression))
+                    {
+                        segments[segments.Count - 1].Add(statement);
+                        continue;
+                    }
+
+                    if (!TryClassifyAwait(awaitExpression.Expression, out bool isDelay,
+                            out ExpressionSyntax delayMilliseconds))
+                        return Fail(awaitExpression,
+                            "Only Task.Yield() and Task.Delay(positive constant milliseconds) can currently be awaited in Udon.");
+
+                    awaitKinds.Add((isDelay, delayMilliseconds));
+                    segments.Add(new List<StatementSyntax>());
+                }
+
+                var entryStatements = new List<StatementSyntax>
+                {
+                    SyntaxFactory.ParseStatement($"if ({stateName} != 0) return;"),
+                    SyntaxFactory.ParseStatement($"{stateName} = -1;")
+                };
+                entryStatements.AddRange(segments[0]);
+                AppendSchedule(entryStatements, stateName, resumeName, 1, awaitKinds[0]);
+                entryMethod = method.WithModifiers(modifiers)
+                    .WithBody(SyntaxFactory.Block(entryStatements));
+
+                var sections = new List<SwitchSectionSyntax>();
+                for (int i = 1; i < segments.Count; i++)
+                {
+                    var statements = new List<StatementSyntax>(segments[i]);
+                    if (i < segments.Count - 1)
+                        AppendSchedule(statements, stateName, resumeName, i + 1, awaitKinds[i]);
+                    else
+                    {
+                        statements.Add(SyntaxFactory.ParseStatement($"{stateName} = 0;"));
+                        statements.Add(SyntaxFactory.ParseStatement("return;"));
+                    }
+
+                    sections.Add(SyntaxFactory.SwitchSection(
+                        SyntaxFactory.SingletonList<SwitchLabelSyntax>(SyntaxFactory.CaseSwitchLabel(
+                            SyntaxFactory.LiteralExpression(SyntaxKind.NumericLiteralExpression,
+                                SyntaxFactory.Literal(i)))),
+                        SyntaxFactory.List(statements)));
+                }
+
+                resumeMethod = SyntaxFactory.MethodDeclaration(
+                        SyntaxFactory.PredefinedType(SyntaxFactory.Token(SyntaxKind.VoidKeyword)), resumeName)
+                    .AddModifiers(SyntaxFactory.Token(SyntaxKind.PublicKeyword))
+                    .WithBody(SyntaxFactory.Block(
+                        SyntaxFactory.SwitchStatement(SyntaxFactory.IdentifierName(stateName))
+                            .WithSections(SyntaxFactory.List(sections))));
+                return true;
+            }
+
+            private static void AppendSchedule(List<StatementSyntax> statements, string stateName,
+                string resumeName, int nextState, (bool IsDelay, ExpressionSyntax DelayMilliseconds) awaitKind)
+            {
+                statements.Add(SyntaxFactory.ParseStatement($"{stateName} = {nextState};"));
+                string schedule = awaitKind.IsDelay
+                    ? $"SendCustomEventDelayedSeconds(nameof({resumeName}), ((float)({awaitKind.DelayMilliseconds})) / 1000f);"
+                    : $"SendCustomEventDelayedFrames(nameof({resumeName}), 1);";
+                statements.Add(SyntaxFactory.ParseStatement(schedule));
+                statements.Add(SyntaxFactory.ParseStatement("return;"));
+            }
+
+            private bool TryClassifyAwait(ExpressionSyntax expression, out bool isDelay,
+                out ExpressionSyntax delayMilliseconds)
+            {
+                isDelay = false;
+                delayMilliseconds = null;
+                if (!(expression is InvocationExpressionSyntax invocation))
+                    return false;
+
+                if (_semanticModel != null)
+                {
+                    if (!(_semanticModel.GetSymbolInfo(invocation).Symbol is IMethodSymbol method) ||
+                        method.ContainingType?.ToDisplayString() != "System.Threading.Tasks.Task")
+                        return false;
+                    if (method.Name == "Yield" && method.Parameters.Length == 0)
+                        return true;
+                    if (method.Name == "Delay" && method.Parameters.Length == 1 &&
+                        method.Parameters[0].Type.SpecialType == SpecialType.System_Int32)
+                    {
+                        Optional<object> constant = _semanticModel.GetConstantValue(
+                            invocation.ArgumentList.Arguments[0].Expression);
+                        if (!constant.HasValue || !(constant.Value is int milliseconds) || milliseconds <= 0)
+                            return false;
+                        isDelay = true;
+                        delayMilliseconds = invocation.ArgumentList.Arguments[0].Expression;
+                        return true;
+                    }
+
+                    return false;
+                }
+
+                string methodName = invocation.Expression.ToString();
+                if ((methodName == "Task.Yield" || methodName == "System.Threading.Tasks.Task.Yield") &&
+                    invocation.ArgumentList.Arguments.Count == 0)
+                    return true;
+                if ((methodName == "Task.Delay" || methodName == "System.Threading.Tasks.Task.Delay") &&
+                    invocation.ArgumentList.Arguments.Count == 1)
+                {
+                    isDelay = true;
+                    delayMilliseconds = invocation.ArgumentList.Arguments[0].Expression;
+                    return true;
+                }
+
+                return false;
+            }
+
+            private static ulong GetStableTypeHash(INamedTypeSymbol type)
+            {
+                const ulong offsetBasis = 14695981039346656037UL;
+                const ulong prime = 1099511628211UL;
+                ulong hash = offsetBasis;
+                string typeName = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                foreach (char character in typeName)
+                {
+                    hash ^= character;
+                    hash *= prime;
+                }
+
+                return hash;
+            }
+
+            private static IEnumerable<string> GetDeclaredMemberNames(MemberDeclarationSyntax member)
+            {
+                if (member is MethodDeclarationSyntax method)
+                    return new[] { method.Identifier.ValueText };
+                if (member is PropertyDeclarationSyntax property)
+                    return new[] { property.Identifier.ValueText };
+                if (member is EventDeclarationSyntax eventDeclaration)
+                    return new[] { eventDeclaration.Identifier.ValueText };
+                if (member is FieldDeclarationSyntax field)
+                    return field.Declaration.Variables.Select(variable => variable.Identifier.ValueText);
+                if (member is EventFieldDeclarationSyntax eventField)
+                    return eventField.Declaration.Variables.Select(variable => variable.Identifier.ValueText);
+                return Array.Empty<string>();
+            }
+
+            private bool Fail(SyntaxNode node, string message)
+            {
+                Diagnostics.Add(new AsyncSyntaxLoweringDiagnostic(node, message));
+                return false;
+            }
+        }
+    }
+
     internal enum CallbackCorrelation
     {
         ResultIdentity,
@@ -872,6 +1216,30 @@ namespace UdonSharp.Compiler.Lowering
 
     internal static class LoweringPipeline
     {
+        internal static bool PrepareSyntaxTrees(CompilationContext context, ModuleBinding[] modules,
+            CSharpCompilation compilation)
+        {
+            bool changed = false;
+            foreach (ModuleBinding module in modules)
+            {
+                SemanticModel model = compilation.GetSemanticModel(module.tree);
+                AsyncSyntaxLoweringResult result = AsyncSyntaxLowerer.Rewrite(module.tree,
+                    declaration => model.GetDeclaredSymbol(declaration) is INamedTypeSymbol type &&
+                                   type.IsUdonSharpBehaviour(), model);
+                foreach (AsyncSyntaxLoweringDiagnostic diagnostic in result.Diagnostics)
+                    context.AddDiagnostic(DiagnosticSeverity.Error, diagnostic.Node, diagnostic.Message);
+
+                if (!result.Changed)
+                    continue;
+
+                module.tree = result.Tree;
+                module.asyncSyntaxLowered = true;
+                changed = true;
+            }
+
+            return changed;
+        }
+
         internal static void Lower(CompilationContext context, ModuleBinding[] modules)
         {
             foreach (ModuleBinding module in modules)
@@ -889,7 +1257,8 @@ namespace UdonSharp.Compiler.Lowering
         private static ExtendedLoweringPlan CreatePlan(ModuleBinding module)
         {
             var root = module.tree.GetRoot();
-            bool usesAsync = root.DescendantNodes().Any(node => node.IsKind(SyntaxKind.AwaitExpression)) ||
+            bool usesAsync = module.asyncSyntaxLowered ||
+                             root.DescendantNodes().Any(node => node.IsKind(SyntaxKind.AwaitExpression)) ||
                              root.DescendantTokens().Any(token => token.IsKind(SyntaxKind.AsyncKeyword));
             var adapters = ImmutableArray.CreateBuilder<SdkCallbackAdapter>();
 

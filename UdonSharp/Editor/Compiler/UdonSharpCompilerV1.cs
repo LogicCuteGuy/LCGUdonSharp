@@ -459,6 +459,31 @@ namespace UdonSharp.Compiler
                 CompilationContext.GetMetadataReferences(),
                 new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, concurrentBuild: compilationContext.Options.ConcurrentBuild));
 
+            // Validate the source program before async syntax is erased. This prevents unresolved or
+            // user-defined lookalike awaiters from becoming valid merely because lowering removed them.
+            foreach (Diagnostic diagnostic in compilation.GetDiagnostics()
+                         .Where(diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error))
+                compilationContext.AddDiagnostic(DiagnosticSeverity.Error, diagnostic.Location,
+                    $"{diagnostic.Severity.ToString().ToLower()} {diagnostic.Id}: {diagnostic.GetMessage()}");
+
+            if (compilationContext.ErrorCount > 0)
+                return;
+
+            // Use the original semantic model to identify U# behaviours, then rewrite only those trees.
+            // Ordinary C# async code in the same project is deliberately left to Roslyn unchanged.
+            if (Lowering.LoweringPipeline.PrepareSyntaxTrees(compilationContext, syntaxTrees, compilation))
+            {
+                compilation = CSharpCompilation.Create(
+                    $"UdonSharpRoslynCompileAssembly{_assemblyCounter++}",
+                    syntaxTrees.Select(e => e.tree),
+                    CompilationContext.GetMetadataReferences(),
+                    new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary,
+                        concurrentBuild: compilationContext.Options.ConcurrentBuild));
+            }
+
+            if (compilationContext.ErrorCount > 0)
+                return;
+
             PrintStageTime("Roslyn Compile", roslynCompileTimer);
 
             compilationContext.RoslynCompilation = compilation;

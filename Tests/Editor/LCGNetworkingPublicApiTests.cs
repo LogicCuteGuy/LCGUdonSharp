@@ -217,6 +217,160 @@ public class PacketReceiver
         }
 
         [Test]
+        public void AsyncLowering_RewritesYieldAndDelayIntoUdonContinuations()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System.Threading.Tasks;
+public class Sample
+{
+    public async void Run()
+    {
+        Before();
+        await Task.Yield();
+        Middle();
+        await Task.Delay(250);
+        After();
+    }
+
+    private void Before() { }
+    private void Middle() { }
+    private void After() { }
+    private void SendCustomEventDelayedFrames(string eventName, int frames) { }
+    private void SendCustomEventDelayedSeconds(string eventName, float seconds) { }
+}");
+
+            Compiler.Lowering.AsyncSyntaxLoweringResult result = RewriteAsyncWithSemantics(source);
+            string lowered = result.Tree.GetRoot().NormalizeWhitespace().ToFullString();
+
+            Assert.That(result.Diagnostics, Is.Empty);
+            Assert.That(lowered, Does.Not.Contain("async void"));
+            Assert.That(lowered, Does.Not.Contain("await "));
+            Assert.That(lowered, Does.Contain("SendCustomEventDelayedFrames"));
+            Assert.That(lowered, Does.Contain("SendCustomEventDelayedSeconds"));
+            Assert.That(lowered, Does.Contain("_Run_resume"));
+            Assert.That(lowered, Does.Contain("case 1:"));
+            Assert.That(lowered, Does.Contain("case 2:"));
+
+            CSharpCompilation loweredCompilation = CSharpCompilation.Create("AsyncLoweringTest",
+                new[] { result.Tree },
+                new[] { MetadataReference.CreateFromFile(typeof(object).Assembly.Location) },
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            Assert.That(loweredCompilation.GetDiagnostics()
+                .Where(diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error),
+                Is.Empty);
+        }
+
+        [Test]
+        public void AsyncLowering_LeavesLegacyTreeUntouchedAndDiagnosesUnsupportedAwaiters()
+        {
+            SyntaxTree legacy = CSharpSyntaxTree.ParseText("public class Legacy { public void Run() { } }");
+            Compiler.Lowering.AsyncSyntaxLoweringResult legacyResult =
+                Compiler.Lowering.AsyncSyntaxLowerer.Rewrite(legacy);
+            Assert.That(legacyResult.Changed, Is.False);
+            Assert.That(legacyResult.Tree, Is.SameAs(legacy));
+
+            SyntaxTree ordinaryAsync = CSharpSyntaxTree.ParseText(@"
+using System.Threading.Tasks;
+public class OrdinaryCSharp { public async Task Run() { await Task.Yield(); } }");
+            Compiler.Lowering.AsyncSyntaxLoweringResult filteredResult =
+                Compiler.Lowering.AsyncSyntaxLowerer.Rewrite(ordinaryAsync, declaration => false);
+            Assert.That(filteredResult.Changed, Is.False);
+            Assert.That(filteredResult.Diagnostics, Is.Empty);
+            Assert.That(filteredResult.Tree, Is.SameAs(ordinaryAsync));
+
+            SyntaxTree unsupported = CSharpSyntaxTree.ParseText(@"
+using System.Threading.Tasks;
+public class Sample { public async void Run() { await Task.Run(() => { }); } }");
+            Compiler.Lowering.AsyncSyntaxLoweringResult unsupportedResult =
+                RewriteAsyncWithSemantics(unsupported);
+            Assert.That(unsupportedResult.Diagnostics.Select(diagnostic => diagnostic.Message),
+                Has.Some.Contains("Only Task.Yield()"));
+            Assert.That(unsupportedResult.Changed, Is.False);
+        }
+
+        [Test]
+        public void AsyncLowering_UsesExactTaskSymbolsAndRejectsUnsupportedMethodShapes()
+        {
+            SyntaxTree aliasSource = CSharpSyntaxTree.ParseText(@"
+using AsyncTask = System.Threading.Tasks.Task;
+public class Sample
+{
+    public async void Run() { await AsyncTask.Yield(); }
+    private void SendCustomEventDelayedFrames(string name, int frames) { }
+}");
+            Assert.That(RewriteAsyncWithSemantics(aliasSource).Diagnostics, Is.Empty);
+
+            SyntaxTree timeSpanDelay = CSharpSyntaxTree.ParseText(@"
+using System;
+using System.Threading.Tasks;
+public class Sample { public async void Run() { await Task.Delay(TimeSpan.FromSeconds(1)); } }");
+            Assert.That(RewriteAsyncWithSemantics(timeSpanDelay).Diagnostics.Select(d => d.Message),
+                Has.Some.Contains("Only Task.Yield()"));
+
+            SyntaxTree customTask = CSharpSyntaxTree.ParseText(@"
+public static class Task
+{
+    public static System.Runtime.CompilerServices.YieldAwaitable Yield()
+        => System.Threading.Tasks.Task.Yield();
+}
+public class Sample { public async void Run() { await Task.Yield(); } }");
+            Assert.That(RewriteAsyncWithSemantics(customTask).Diagnostics.Select(d => d.Message),
+                Has.Some.Contains("Only Task.Yield()"));
+
+            string[] rejectedSources =
+            {
+                "using System.Threading.Tasks; public class Sample { public static async void Run() { await Task.Yield(); } }",
+                "using System.Threading.Tasks; public class Sample { public async void Run<T>() { await Task.Yield(); } }",
+                "using System.Threading.Tasks; public class Sample { public async void Run() { M(out int value); await Task.Yield(); } private void M(out int value) { value = 1; } }",
+                "using System.Threading.Tasks; public class Sample { public async void Run() { if (this is Sample value) { } await Task.Yield(); } }",
+                "using System.Threading.Tasks; public class Sample { public async void Run() { await Task.Delay(0); } }",
+                "using System.Threading.Tasks; public class Sample { public int delay = 1; public async void Run() { await Task.Delay(delay); } }",
+                @"using System;
+using System.Threading.Tasks;
+using VRC.SDK3.UdonNetworkCalling;
+namespace VRC.SDK3.UdonNetworkCalling
+{
+    [AttributeUsage(AttributeTargets.Method)] public sealed class NetworkCallableAttribute : Attribute { }
+}
+public class Sample
+{
+    [NetworkCallable] public async void Run() { await Task.Yield(); }
+}",
+            };
+
+            foreach (string rejectedSource in rejectedSources)
+                Assert.That(RewriteAsyncWithSemantics(CSharpSyntaxTree.ParseText(rejectedSource)).Diagnostics,
+                    Is.Not.Empty, rejectedSource);
+        }
+
+        [Test]
+        public void AsyncLowering_UsesDistinctContinuationEventsAcrossInheritance()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System.Threading.Tasks;
+public class Base
+{
+    public async void Run() { await Task.Yield(); }
+    protected void SendCustomEventDelayedFrames(string name, int frames) { }
+}
+public class Derived : Base
+{
+    public new async void Run() { await Task.Yield(); }
+}");
+
+            Compiler.Lowering.AsyncSyntaxLoweringResult result = RewriteAsyncWithSemantics(source);
+            string[] continuationNames = result.Tree.GetRoot().DescendantNodes()
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax>()
+                .Select(method => method.Identifier.ValueText)
+                .Where(name => name.StartsWith("__uasync_") && name.EndsWith("_Run_resume"))
+                .ToArray();
+
+            Assert.That(result.Diagnostics, Is.Empty);
+            Assert.That(continuationNames, Has.Length.EqualTo(2));
+            Assert.That(continuationNames.Distinct(), Has.Count.EqualTo(2));
+        }
+
+        [Test]
         public void GenericRestrictions_RejectListTypeReferences()
         {
             CSharpCompilation compilation = CreateGenericRestrictionCompilation(@"
@@ -337,6 +491,40 @@ public class IntBox : Box<int> { }");
         }
 
         [Test]
+        public void GenericRestrictions_AllowSdkContactProxyAndInheritedMemberTypes()
+        {
+            CSharpCompilation compilation = CreateGenericRestrictionCompilation("public class Sample { }")
+                .AddReferences(MetadataReference.CreateFromFile(Assembly.Load("VRC.Dynamics").Location));
+            INamedTypeSymbol sender = compilation.GetTypeByMetadataName("VRC.Dynamics.ContactSenderProxy");
+            Assert.That(sender, Is.Not.Null);
+            INamedTypeSymbol genericBase = sender.BaseType;
+            Assert.That(genericBase.IsGenericType, Is.True);
+            Assert.That(genericBase.GetMembers("player"), Is.Not.Empty);
+
+            foreach (ITypeSymbol type in new ITypeSymbol[]
+                { sender, genericBase, genericBase.OriginalDefinition, compilation.CreateArrayTypeSymbol(sender) })
+                Assert.That(Compiler.GenericRestrictionPolicy.GetViolation(
+                    type, Compiler.GenericUseSite.TypeReference), Is.Null, type.ToDisplayString());
+        }
+
+        [Test]
+        public void GenericRestrictions_MetadataReferenceExemptionDoesNotAllowAllocationOrRuntimeTypes()
+        {
+            CSharpCompilation compilation = CreateGenericRestrictionCompilation("public class Sample { }");
+            INamedTypeSymbol type = compilation.GetTypeByMetadataName("System.Collections.Generic.Dictionary`2")
+                .Construct(compilation.GetSpecialType(SpecialType.System_Int32),
+                    compilation.GetSpecialType(SpecialType.System_Int32));
+
+            Assert.That(Compiler.GenericRestrictionPolicy.GetViolation(
+                type, Compiler.GenericUseSite.ObjectCreation), Does.Contain("generic heap objects"));
+            Assert.That(Compiler.GenericRestrictionPolicy.GetViolation(
+                type, Compiler.GenericUseSite.RuntimeType), Does.Contain("generic heap object types"));
+            Assert.That(Compiler.GenericRestrictionPolicy.GetViolation(
+                type.ConstructUnboundGenericType(), Compiler.GenericUseSite.TypeReference),
+                Does.Contain("Open generic type"));
+        }
+
+        [Test]
         public void GenericRestrictions_RejectOpenConstructedRuntimeTypes()
         {
             CSharpCompilation compilation = CreateGenericRestrictionCompilation(@"
@@ -413,6 +601,22 @@ public class Invalid : First, Second { }");
             return CSharpCompilation.Create("GenericRestrictionTest", new[] { tree },
                 new[] { MetadataReference.CreateFromFile(typeof(object).Assembly.Location) },
                 new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        }
+
+        private static Compiler.Lowering.AsyncSyntaxLoweringResult RewriteAsyncWithSemantics(SyntaxTree tree)
+        {
+            MetadataReference[] references = new[]
+                {
+                    typeof(object).Assembly.Location,
+                    typeof(Task).Assembly.Location,
+                }
+                .Distinct()
+                .Select(location => MetadataReference.CreateFromFile(location))
+                .ToArray();
+            CSharpCompilation compilation = CSharpCompilation.Create("AsyncSemanticTest", new[] { tree },
+                references, new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            return Compiler.Lowering.AsyncSyntaxLowerer.Rewrite(tree, declaration => true,
+                compilation.GetSemanticModel(tree));
         }
     }
 }

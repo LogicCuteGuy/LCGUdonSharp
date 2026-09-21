@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
+using UdonSharp.Compiler.Binder;
 using UdonSharp.Compiler.Symbols;
 using UdonSharp.Core;
 
@@ -39,6 +40,13 @@ namespace UdonSharp.Compiler
 
             if (useSite == GenericUseSite.BehaviourDeclaration && namedType.IsGenericType)
                 return $"Generic U# behaviour '{namedType}' is not supported; behaviours must be non-generic concrete types.";
+
+            // SDK extern members can be declared on generic metadata base classes
+            // (for example ContactBaseProxy<TProxy, TContact>). Binding their symbols
+            // does not allocate a U# heap object; extern exposure is checked separately.
+            if (useSite == GenericUseSite.TypeReference && namedType.IsExternType() &&
+                namedType.ContainingNamespace?.ToDisplayString().StartsWith("VRC.", StringComparison.Ordinal) == true)
+                return null;
 
             INamedTypeSymbol genericHeapType = null;
             if (useSite == GenericUseSite.ObjectCreation || !IsCompilerOnlyTaskHandle(namedType))

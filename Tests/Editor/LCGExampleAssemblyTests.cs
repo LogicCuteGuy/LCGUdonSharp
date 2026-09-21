@@ -21,6 +21,8 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer.Tests
         private const string ExpectedAssemblyName = "LogicCuteGuy.LCGUdonSharp.Examples";
         private const string GenericRestrictionsGuidePath =
             "Packages/com.logiccuteguy.lcgudonsharp/Example/GenericRestrictions/README.md";
+        private const string AsyncExampleScriptPath =
+            "Packages/com.logiccuteguy.lcgudonsharp/Example/AsyncAwait/AsyncYieldDelayExample.cs";
 
         private static readonly string[] ExampleScriptPaths =
         {
@@ -85,6 +87,30 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer.Tests
                 Assert.That(assembly, Does.Contain("_interact"),
                     programAssetPath + " did not emit its Interact entry point.");
             }
+        }
+
+        [Test]
+        public void AsyncYieldDelayExample_CompilesIntoScheduledUdonContinuations()
+        {
+            MonoScript script = AssetDatabase.LoadAssetAtPath<MonoScript>(AsyncExampleScriptPath);
+            Assert.That(script, Is.Not.Null, AsyncExampleScriptPath + " was not imported by Unity.");
+
+            string programAssetPath = Path.ChangeExtension(AsyncExampleScriptPath, ".asset");
+            var programAsset = AssetDatabase.LoadAssetAtPath<UdonSharp.UdonSharpProgramAsset>(programAssetPath);
+            Assert.That(programAsset, Is.Not.Null, programAssetPath + " is missing.");
+            Assert.That(programAsset.sourceCsScript, Is.SameAs(script));
+
+            UdonSharpCompilerV1.CompileSync(new UdonSharpCompileOptions { IsEditorBuild = true });
+            LogAssert.NoUnexpectedReceived();
+            Assert.That(UdonSharp.UdonSharpProgramAsset.AnyUdonSharpScriptHasError(), Is.False);
+
+            var cacheType = typeof(UdonSharpEditorUtility).Assembly.GetType("UdonSharp.UdonSharpEditorCache");
+            object cache = cacheType.GetProperty("Instance", BindingFlags.Public | BindingFlags.Static).GetValue(null);
+            string assembly = (string)cacheType.GetMethod("GetUASMStr").Invoke(cache, new object[] { programAsset });
+            Assert.That(assembly, Does.Contain("_interact"));
+            Assert.That(assembly, Does.Contain("_Interact_resume"));
+            Assert.That(assembly, Does.Contain("SendCustomEventDelayedFrames"));
+            Assert.That(assembly, Does.Contain("SendCustomEventDelayedSeconds"));
         }
 
         [Test]

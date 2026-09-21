@@ -67,6 +67,7 @@ feature.
 
 | Example | Feature | Description |
 |---------|---------|-------------|
+| [`Example/AsyncAwait`](Example/AsyncAwait/README.md) | Async lowering | Runnable `Task.Yield()` and `Task.Delay(int)` continuation example. |
 | [`Example/Interfaces`](Example/Interfaces/README.md) | Interface MVP | Defines `INumberOperation` with two implementations (`AddNumberOperation`, `MultiplyNumberOperation`). `InterfaceExampleRunner` invokes both through the interface and reads the property. |
 | [`Example/Networking`](Example/Networking/README.md) | LCG manual packets | Three showcases — coalesced packet fields with callbacks, ordered packet methods with broadcast and targeted delivery, and zone-scoped manual object sync. |
 | [`Example/GenericRestrictions`](Example/GenericRestrictions/README.md) | Generic build-time diagnostics | Bad/good pairs for open generics, generic behaviours and heap objects, `List<T>`, interface contracts, multiple bases, and the `Task<T>` compiler-handle exception. |
