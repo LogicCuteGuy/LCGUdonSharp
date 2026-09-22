@@ -9,7 +9,7 @@ implementations. `InterfaceExampleRunner` invokes both implementations through
 1. Fix any unrelated C# compilation errors and let Unity finish compiling.
 2. Open `../TestLCGUdonSharp.unity`, or add `InterfaceExampleRunner`,
    `AddNumberOperation`, and `MultiplyNumberOperation` to scene objects —
-   each script already ships with its paired UdonSharp `.asset`.
+   each script already ships with its paired `UdonSharpProgramAsset` (same basename).
 3. Assign the two operation components and the input on the runner.
 4. Enter Play Mode and inspect the Console. The default input `10` produces:
    - Add result: `15`

@@ -15,8 +15,7 @@ This folder contains real U# examples for the build-time async lowering:
 - `AsyncAvailableProductsExample`, `AsyncPurchasesExample`, and
   `AsyncProductOwnersExample` cover Creator Economy list operations.
 
-Add an example to a GameObject with its generated Udon program, assign its URL
-and (for images) target material, enter the world, and interact with it.
+Add an example to a GameObject with its paired `UdonSharpProgramAsset` (the `.asset` next to each `.cs`, same basename), assign its URL and (for images) target material, enter the world, and interact with it.
 
 Currently supported in this slice:
 

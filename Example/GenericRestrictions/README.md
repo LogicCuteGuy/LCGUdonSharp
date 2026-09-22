@@ -8,7 +8,10 @@ use one case at a time when testing a diagnostic in a Unity project.
 
 ## Runnable U# scripts
 
-These scripts are active members of the registered UdonSharp example assembly.
+These scripts are active members of the registered UdonSharp example assembly
+(`LogicCuteGuy.LCGUdonSharp.Examples.asmdef`, registered for UdonSharp
+compilation by `LogicCuteGuy.LCGUdonSharp.Examples.USharp.asset`, see
+[Key terms](../README.md#key-terms)).
 Each runs the supported pattern and keeps the corresponding rejected syntax as
 comments so Unity can still compile the package. Every script has a matching
 `UdonSharpProgramAsset`, and `Interact()` runs its active demonstration.

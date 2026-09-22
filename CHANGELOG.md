@@ -8,8 +8,10 @@
 - Added validated versioned packet frames, authority checks, replay protection, field coalescing, callbacks, and forced field sends.
 - Added `LCGNetworkZone` build-scene injection, membership-scoped recipients, ownership guards, exit modes, and manual object state packets.
 - Added fail-closed build validation for unsupported Continuous, Udon Graph, overlapping-zone, and zone-native-sync configurations.
+- Added `Example/TestLCGUdonSharp.unity` with per-feature example folders (async/await, interfaces, extended language, generic restrictions, packet networking), compiled through the registered `LogicCuteGuy.LCGUdonSharp.Examples` assembly with a paired `UdonSharpProgramAsset` per script.
+- Documented program-asset and U# assembly-definition naming, assembly scanning rules, and the full menu command set.
 
 ## 0.1.0
 
-- Moved the interface-enabled UdonSharp clone out of `com.vrchat.worlds` into `LCGUdonSharp`.
-- Added automatic, idempotent setup with backup, repair, and restore commands.
+- Moved the interface-enabled UdonSharp clone out of `com.vrchat.worlds` into `Packages/com.logiccuteguy.lcgudonsharp/UdonSharp`, leaving the SDK and `Assets/` untouched.
+- Added automatic, idempotent setup with the `Tools > LCGUdonSharp > Install or Repair` and `Tools > LCGUdonSharp > Restore VRChat UdonSharp and Disable Auto Setup` commands, SDK backups under `Library/LogicCuteGuy.LCGUdonSharp/Backups`, state in `ProjectSettings/LogicCuteGuy.LCGUdonSharp.json`, and handling for the legacy install locations of earlier versions.

@@ -39,7 +39,8 @@ replaces `VRC_ObjectSync` with a generated manual relay.
 
 1. Fix any unrelated C# compilation errors and let Unity finish compiling.
 2. Open `../TestLCGUdonSharp.unity`, or manually add the components to scene
-   objects (each showcase `.cs` already ships with its paired UdonSharp `.asset`):
+   objects (each showcase `.cs` already ships with its paired
+   `UdonSharpProgramAsset`, same basename):
    - Place an `LCGNetworkZone` on a trigger collider that covers the play area.
    - Add the desired showcase behaviour to a child object.
    - For `LCGZoneObjectShowcase`, add a `VRC_ObjectSync` component to the
