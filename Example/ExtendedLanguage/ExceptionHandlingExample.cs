@@ -7,6 +7,8 @@ namespace LogicCuteGuy.LCGUdonSharp.Examples.ExtendedLanguage
     [UdonBehaviourSyncMode(BehaviourSyncMode.NoVariableSync)]
     public class ExceptionHandlingExample : UdonSharpBehaviour
     {
+        private const string LogPrefix = "[try/catch] ";
+
         public int result;
         public int finallyCount;
         public string message;
@@ -49,11 +51,13 @@ namespace LogicCuteGuy.LCGUdonSharp.Examples.ExtendedLanguage
                 message = exception.Message;
                 argumentCaught = true;
                 result = 10;
+                Debug.Log(LogPrefix + "Caught ArgumentException: " + exception.Message);
             }
             finally
             {
                 finallyCount++;
                 result++;
+                Debug.Log(LogPrefix + "The first finally block ran.");
             }
 
             try
@@ -68,29 +72,62 @@ namespace LogicCuteGuy.LCGUdonSharp.Examples.ExtendedLanguage
                 code = exception.Code;
                 operation = exception.Operation;
                 result += exception.Code;
+                Debug.Log(LogPrefix + "Caught UdonException: " + exception.Message);
+                Debug.Log(LogPrefix + "Kind=" + (int)exception.Kind + ", Code=" + exception.Code +
+                    ", Operation=" + exception.Operation);
             }
 
             int[] values = { 1 };
             try { result += values[2]; }
-            catch (IndexOutOfRangeException) { arrayCaught = true; result += 100; }
+            catch (IndexOutOfRangeException)
+            {
+                arrayCaught = true;
+                result += 100;
+                Debug.Log(LogPrefix + "Caught an array upper-bound read.");
+            }
 
             string text = "ok";
             try { result += text[3]; }
-            catch (IndexOutOfRangeException) { stringCaught = true; result += 1000; }
+            catch (IndexOutOfRangeException)
+            {
+                stringCaught = true;
+                result += 1000;
+                Debug.Log(LogPrefix + "Caught a string upper-bound read.");
+            }
 
             int divisor = 0;
             try { result += 10 / divisor; }
-            catch (DivideByZeroException) { divideCaught = true; result += 10000; }
+            catch (DivideByZeroException)
+            {
+                divideCaught = true;
+                result += 10000;
+                Debug.Log(LogPrefix + "Caught integral division by zero.");
+            }
 
             try { result += 10 % divisor; }
-            catch (DivideByZeroException) { moduloCaught = true; result += 1000000000; }
+            catch (DivideByZeroException)
+            {
+                moduloCaught = true;
+                result += 1000000000;
+                Debug.Log(LogPrefix + "Caught integral modulo by zero.");
+            }
 
             string missing = null;
             try { result += missing.Length; }
-            catch (NullReferenceException) { nullCaught = true; result += 10000000; }
+            catch (NullReferenceException)
+            {
+                nullCaught = true;
+                result += 10000000;
+                Debug.Log(LogPrefix + "Caught a null receiver.");
+            }
 
             try { values[NextBadIndex()] = 4; }
-            catch (IndexOutOfRangeException) { negativeWriteCaught = true; result += 100000000; }
+            catch (IndexOutOfRangeException)
+            {
+                negativeWriteCaught = true;
+                result += 100000000;
+                Debug.Log(LogPrefix + "Caught a negative array write index.");
+            }
 
             try
             {
@@ -101,6 +138,7 @@ namespace LogicCuteGuy.LCGUdonSharp.Examples.ExtendedLanguage
             {
                 rethrowCaught = true;
                 result += 100000;
+                Debug.Log(LogPrefix + "Caught a rethrown exception.");
             }
 
             try
@@ -112,6 +150,7 @@ namespace LogicCuteGuy.LCGUdonSharp.Examples.ExtendedLanguage
             {
                 finallyOverrideCaught = true;
                 result += 1000000;
+                Debug.Log(LogPrefix + "The exception from finally replaced the earlier exception.");
             }
 
             result += ReturnThroughFinally();
@@ -128,6 +167,8 @@ namespace LogicCuteGuy.LCGUdonSharp.Examples.ExtendedLanguage
                     finallyCount += 100;
                 }
             }
+
+            Debug.Log(LogPrefix + "Completed. Result=" + result + ", FinallyCount=" + finallyCount);
         }
 
         private void ThrowArgumentNull()
