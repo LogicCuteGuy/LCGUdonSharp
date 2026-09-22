@@ -10,7 +10,7 @@ Runnable UdonSharp behaviours for every LCGUdonSharp feature. Open **`TestLCGUdo
 | [`Interfaces/`](Interfaces/README.md) | C# interfaces on `UdonSharpBehaviour` | `InterfaceExampleRunner`, `AddNumberOperation`, `MultiplyNumberOperation` | [Interfaces guide](Interfaces/README.md) |
 | [`AsyncAwait/`](AsyncAwait/README.md) | Build-time `async`/`await` lowering | `AsyncYieldDelayExample`, `AsyncStringDownloadExample`, `AsyncImageDownloadExample`, `AsyncVideoLoadExample`, `AsyncVideoEndExample`, `AsyncGpuReadbackExample`, `AsyncSerializationExample`, `AsyncAvailableProductsExample`, `AsyncPurchasesExample`, `AsyncProductOwnersExample` | [Async/await guide](AsyncAwait/README.md) |
 | [`ExtendedLanguage/`](ExtendedLanguage/README.md) | `ref`/`out`, closed generics, LINQ closures, `dynamic`, `Span<T>`, `try`/`catch` | `RefOutExample`, `GenericHierarchyExample`, `LinqClosureExample`, `DynamicExample`, `SpanExample`, `ExceptionHandlingExample` | [Extended language guide](ExtendedLanguage/README.md) |
-| [`GenericRestrictions/`](GenericRestrictions/README.md) | Rejected generic/hierarchy shapes with supported replacements | `OpenGenericsExample`, `GenericBehavioursExample`, `GenericHeapObjectsExample`, `ListTypesExample`, `InterfaceMembersExample`, `MultipleConcreteBasesExample` | [Restrictions guide](GenericRestrictions/README.md) |
+| [`GenericRestrictions/`](GenericRestrictions/README.md) | Normal C# collections plus rejected generic/hierarchy shapes | `OpenGenericsExample`, `GenericBehavioursExample`, `GenericHeapObjectsExample`, `ListTypesExample`, `InterfaceMembersExample`, `MultipleConcreteBasesExample` | [Collections and restrictions guide](GenericRestrictions/README.md) |
 
 Root-level files:
 

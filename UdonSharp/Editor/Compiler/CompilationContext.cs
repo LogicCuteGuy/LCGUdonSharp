@@ -2556,6 +2556,28 @@ namespace UdonSharp.Compiler.Lowering
             CSharpCompilation compilation)
         {
             bool changed = false;
+            bool collectionChanged = false;
+            foreach (ModuleBinding module in modules)
+            {
+                SemanticModel model = compilation.GetSemanticModel(module.tree);
+                CollectionSyntaxLoweringResult result = CollectionSyntaxLowerer.Rewrite(module.tree,
+                    declaration => model.GetDeclaredSymbol(declaration) is INamedTypeSymbol type &&
+                                   type.IsUdonSharpBehaviour(), model);
+                foreach (CollectionSyntaxLoweringDiagnostic diagnostic in result.Diagnostics)
+                    context.AddDiagnostic(DiagnosticSeverity.Error, diagnostic.Node, diagnostic.Message);
+
+                if (!result.Changed)
+                    continue;
+
+                module.tree = result.Tree;
+                collectionChanged = true;
+                changed = true;
+            }
+
+            if (collectionChanged)
+                compilation = compilation.RemoveAllSyntaxTrees().AddSyntaxTrees(modules.Select(module => module.tree));
+
+            bool extendedChanged = false;
             foreach (ModuleBinding module in modules)
             {
                 SemanticModel model = compilation.GetSemanticModel(module.tree);
@@ -2569,10 +2591,11 @@ namespace UdonSharp.Compiler.Lowering
                     continue;
 
                 module.tree = result.Tree;
+                extendedChanged = true;
                 changed = true;
             }
 
-            if (changed)
+            if (extendedChanged)
                 compilation = compilation.RemoveAllSyntaxTrees().AddSyntaxTrees(modules.Select(module => module.tree));
 
             foreach (ModuleBinding module in modules)

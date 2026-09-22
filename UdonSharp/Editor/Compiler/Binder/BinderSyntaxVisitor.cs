@@ -390,6 +390,10 @@ namespace UdonSharp.Compiler.Binder
                     return new[] { (int)UdonExceptionKind.ArgumentOutOfRange };
                 case "System.NotSupportedException":
                     return new[] { (int)UdonExceptionKind.NotSupported };
+                case "System.Collections.Generic.KeyNotFoundException":
+                    return new[] { (int)UdonExceptionKind.KeyNotFound };
+                case "System.Text.Json.JsonException":
+                    return new[] { (int)UdonExceptionKind.Json };
                 default:
                     throw new CompilerException($"Exception type '{typeName}' is not supported by compiler-managed catches.", node.Declaration.Type.GetLocation());
             }
@@ -459,6 +463,8 @@ namespace UdonSharp.Compiler.Binder
                 case "System.ArgumentNullException": return (int)UdonExceptionKind.ArgumentNull;
                 case "System.ArgumentOutOfRangeException": return (int)UdonExceptionKind.ArgumentOutOfRange;
                 case "System.NotSupportedException": return (int)UdonExceptionKind.NotSupported;
+                case "System.Collections.Generic.KeyNotFoundException": return (int)UdonExceptionKind.KeyNotFound;
+                case "System.Text.Json.JsonException": return (int)UdonExceptionKind.Json;
                 default:
                     throw new CompilerException($"Exception type '{typeName}' is not supported by compiler-managed throw.", node.GetLocation());
             }

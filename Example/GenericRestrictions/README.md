@@ -21,7 +21,7 @@ comments so Unity can still compile the package. Every script has a matching
 | Open generics | [`OpenGenericsExample.cs`](OpenGenericsExample.cs) |
 | Generic behaviours | [`GenericBehavioursExample.cs`](GenericBehavioursExample.cs) |
 | Generic heap objects | [`GenericHeapObjectsExample.cs`](GenericHeapObjectsExample.cs) |
-| `List<T>` | [`ListTypesExample.cs`](ListTypesExample.cs) |
+| Collections, JSON, bytes, and bits | [`ListTypesExample.cs`](ListTypesExample.cs) |
 | Unsupported interface members | [`InterfaceMembersExample.cs`](InterfaceMembersExample.cs) |
 | Multiple concrete bases | [`MultipleConcreteBasesExample.cs`](MultipleConcreteBasesExample.cs) |
 
@@ -165,50 +165,43 @@ int result = GenericTools<int>.Identity(value);      // Static generic helpers
 IValueSource<int> source = intSource;                // Closed generic interfaces
 ```
 
-## List<T>
+## Collections, JSON, bytes, and bits
 
-`List<T>` is rejected directly, inside another generic type, and through a
-derived class.
-
-**Rejected**
+Exact `List<T>` and `Dictionary<TKey,TValue>` types are compiler-lowered to
+VRChat `DataList` and `DataDictionary` values. The runnable
+[`ListTypesExample.cs`](ListTypesExample.cs) demonstrates initializers,
+indexers, mutation, `System.Text.Json`-style round trips, a Manual-mode synced
+list, UTF-8 bytes, `BitConverter`, `Buffer.BlockCopy`, and bitwise operators.
 
 ```csharp
-using System.Collections.Generic;
-using UdonSharp;
+List<int> values = new List<int> { 1, 2, 3 };
+Dictionary<string, int> scores = new Dictionary<string, int>
+{
+    { "alpha", 10 },
+};
 
-public class Wrapper<T> { }
+scores["count"] = values.Count;
+string json = JsonSerializer.Serialize(scores);
+Dictionary<string, int> copy =
+    JsonSerializer.Deserialize<Dictionary<string, int>>(json);
+```
+
+The compiler only recognizes the exact BCL collection definitions. Interfaces,
+derived collections, arbitrary enumerable sources, custom comparers, and user
+types that merely share the names `List` or `Dictionary` are not lowered.
+
+```csharp
 public class Scores : List<int> { }
 
-public class ListExamples : UdonSharpBehaviour
-{
-    private List<int> values;
-    private Wrapper<List<int>> wrappedValues;
-    private Scores derivedValues; // References the derived List<T> type.
-}
+IList<int> interfaceValues;       // Rejected: collection interface
+Scores derivedValues;             // Rejected: derived collection
 ```
 
-Use a fixed array and track the used length explicitly.
-
-**Replacement**
-
-```csharp
-using UdonSharp;
-
-public class ArrayBackedValues : UdonSharpBehaviour
-{
-    public int[] values = new int[32];
-    public int valueCount;
-
-    public bool TryAdd(int value)
-    {
-        if (valueCount >= values.Length)
-            return false;
-
-        values[valueCount++] = value;
-        return true;
-    }
-}
-```
+Collection fields cannot use Unity Inspector serialization. Keep local fields
+private, or add `[NonSerialized]` to a public field. A synchronized collection
+must use `[UdonBehaviourSyncMode(BehaviourSyncMode.Manual)]` and
+`[UdonSynced, NonSerialized]`; ownership transfer and `RequestSerialization()`
+remain explicit.
 
 ## Unsupported interface members
 

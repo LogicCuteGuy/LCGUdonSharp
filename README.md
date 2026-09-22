@@ -36,6 +36,7 @@ LCGUdonSharp extends the UdonSharp compiler with C# interfaces, synchronous comp
 | **Async/Await** | Build-time lowering for `await Task.Yield()`, `await Task.Delay(int)`, and one VRChat SDK await per behaviour (string/image downloads, video, GPU readback, serialization, Creator Economy). |
 | **Synchronous Exceptions** | Compiler-managed `try`/`catch`/`finally`, explicit throws, rethrow, and guarded null, index, and integral divide/modulo failures without relying on unavailable Udon exception opcodes. |
 | **Extended Language** | `ref`/`out` (including `out var` and recursion), closed generics, interface diamonds, LINQ lambdas with captures, proven `dynamic`, array-backed `Span<T>`. |
+| **C# Collections & JSON** | Exact `List<T>` and `Dictionary<TKey,TValue>` syntax lowered to `DataList`/`DataDictionary`, plus a VRCJson-backed `System.Text.Json` facade and manual synced-collection payloads. |
 | **Manual Packet Networking** *(experimental)* | `[LCGPacket]` fields and methods with versioned frames, authority checks, replay protection, field coalescing, verified-sender callbacks, targeted PlayerObject delivery. |
 | **Network Zones** | `LCGNetworkZone` scopes packet recipients and ownership to a trigger volume; manual object-sync replaces `VRC_ObjectSync` inside zones. |
 | **Clean Installation** | Automatic, idempotent setup with backup/restore — no modified files inside `com.vrchat.worlds` or `Assets/`. Installer state lives in `ProjectSettings/LogicCuteGuy.LCGUdonSharp.json`; SDK backups live in `Library/LogicCuteGuy.LCGUdonSharp/Backups`. |
@@ -100,6 +101,7 @@ Your C# source
    ├─ ref/out, closures,
    │  closed generics,
    │  dynamic, Span<T> ────► concrete array/offset/length locals + loops
+   ├─ List/Dictionary/JSON ─► DataList/DataDictionary + VRCJson helpers
    └─ [LCGPacket] ─────────► versioned packet frames + mailbox delivery
    │
    ▼
@@ -277,6 +279,52 @@ int[] result = values
 
 Also supported: closed generic static helpers, closed generic interface diamonds, proven `dynamic`, array-backed local `Span<int>`.
 
+### Collections, JSON, bytes, and bits
+
+Exact `List<T>` and `Dictionary<TKey,TValue>` types can be written with ordinary C# syntax. The compiler lowers them to VRChat `DataList`, `DataDictionary`, and `DataToken` operations; existing code that directly uses those SDK types or `VRCJson` is left unchanged.
+
+```csharp
+using System.Collections.Generic;
+using System.Text.Json;
+
+List<int> values = new List<int> { 1, 2, 3 };
+Dictionary<string, int> scores = new Dictionary<string, int>
+{
+    { "alpha", 10 },
+};
+
+scores["count"] = values.Count;
+string json = JsonSerializer.Serialize(scores,
+    new JsonSerializerOptions { WriteIndented = true });
+Dictionary<string, int> copy =
+    JsonSerializer.Deserialize<Dictionary<string, int>>(json);
+```
+
+Supported collection members include constructors, initializers, count/capacity, typed indexers, `foreach`, the common add/insert/remove/search operations, `TryGetValue`, dictionary keys/values, and typed `ToArray`. Collection interfaces, derived collection classes, custom comparers, nullable collection annotations, and collection LINQ remain unsupported.
+
+String-key dictionaries serialize as normal JSON objects. Other JSON-safe key types use the versioned `$lcgDictionary` entry envelope. JSON rejects object references, NaN, and Infinity as VRCJson does; integer targets also require a finite, integral, in-range JSON number. `TrySerialize` and `TryDeserialize` return an error string, while `Serialize` and `Deserialize` throw compiler-managed `JsonException`.
+
+For network synchronization, use a non-Inspector field on a Manual-sync behaviour:
+
+```csharp
+[UdonBehaviourSyncMode(BehaviourSyncMode.Manual)]
+public class SharedValues : UdonSharpBehaviour
+{
+    [UdonSynced, System.NonSerialized]
+    private List<int> values = new List<int>();
+
+    public void AddValue(int value)
+    {
+        values.Add(value);
+        RequestSerialization(); // ownership and sending stay explicit
+    }
+}
+```
+
+The compiler adds one hidden synced JSON string and composes it into `OnPreSerialization` and `OnDeserialization`. An empty payload means `null`; `[]` and `{}` mean empty collections. Decode failures keep the current value, and encode failures keep the last valid payload. Continuous sync, `FieldChangeCallback`, Inspector serialization, and statically non-JSON-safe synchronized elements are rejected.
+
+Normal SDK-supported binary APIs remain available: `byte[]`, bitwise operators, `BitConverter`, `Buffer.BlockCopy`, UTF-8 encoding, and `DataToken.Bitcast`. The intrinsic facade intentionally occupies `System.Text.Json`; installing a separate real `System.Text.Json` assembly can create a namespace/type conflict. Calls made outside compiler-lowered UdonSharp behaviours throw `NotSupportedException`.
+
 ### Manual packet networking
 
 **Coalesced field with callback:**
@@ -341,7 +389,7 @@ The `Example/` folder contains runnable scenes and scripts for every feature. Op
 | [`Example/AsyncAwait`](Example/AsyncAwait/README.md) | Async lowering | `Task.Yield()`, `Task.Delay`, string/image/video awaits, GPU readback, serialization, Creator Economy. |
 | [`Example/Interfaces`](Example/Interfaces/README.md) | Interface MVP | `INumberOperation` with Add/Multiply implementations invoked through the interface. Input `10` → `15`, `30`. |
 | [`Example/Networking`](Example/Networking/README.md) | LCG manual packets | Coalesced packet fields with callbacks, broadcast/targeted packet methods, zone-scoped object sync. |
-| [`Example/GenericRestrictions`](Example/GenericRestrictions/README.md) | Build-time diagnostics | Rejected/accepted pairs for open generics, `List<T>`, interface contracts, multiple bases, `Task<T>`. |
+| [`Example/GenericRestrictions`](Example/GenericRestrictions/README.md) | Collections and restrictions | Runnable collection/JSON/binary example plus rejected open generics, interfaces, multiple bases, and `Task<T>` notes. |
 | [`Example/ExtendedLanguage`](Example/ExtendedLanguage/README.md) | Extended C# | `try`/`catch`/`finally`, `ref`/`out`, closed generics & interface diamonds, LINQ closures, `dynamic`, `Span<T>`. |
 
 ### Quick start: run an example
@@ -374,6 +422,8 @@ Two different assets are involved (definitions in [Key terms](#key-terms)):
 - LINQ `Where`/`Select`/`ToArray` with capturing lambdas (lowered to loops)
 - Proven `dynamic` (single concrete type substituted at build time)
 - Array-backed local `Span<T>` (indexing, `Length`, `Fill`, `ToArray`, `Clear`)
+- Exact `List<T>` and `Dictionary<TKey,TValue>` with common members, iteration, nesting, JSON conversion, and Manual-mode JSON synchronization
+- `byte[]`, bitwise operators, `BitConverter`, `Buffer.BlockCopy`, UTF-8 encoding, and `DataToken.Bitcast`
 - `[LCGPacket]` fields and `void` methods (≤ 8 args), zones, PlayerObject mailboxes
 - Synchronous `try`/`catch`/`finally`, approved typed catches, catch-all, explicit `throw new`, rethrow, and guarded null/bounds/integral-zero failures
 
@@ -382,7 +432,8 @@ Two different assets are involved (definitions in [Key terms](#key-terms)):
 <details>
 <summary><b>Rejected at build time (with diagnostics)</b></summary>
 
-- Open generics (`typeof(Converter<>)`), generic behaviours, generic heap objects, `List<T>`
+- Open generics (`typeof(Converter<>)`), generic behaviours, generic heap objects other than the exact lowered collections
+- Collection interfaces, derived collections, custom comparers, nullable collections, Inspector-serialized collections, and collection LINQ
 - Generic interfaces/methods, interface inheritance, default/static interface members, events, indexers, explicit interface implementations
 - Nested awaits, explicit returns in async, direct `Task<T>` result assignment, multiple simultaneous SDK awaits
 - `await` inside `try`, catch filters, arbitrary thrown expressions, unsupported exception types/constructors/members, and catch variables that escape their catch

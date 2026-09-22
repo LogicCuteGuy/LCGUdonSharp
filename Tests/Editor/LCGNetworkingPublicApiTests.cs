@@ -227,6 +227,7 @@ public class PacketReceiver
             {
                 "Unknown", "Explicit", "NullReference", "IndexOutOfRange", "DivideByZero",
                 "InvalidOperation", "Argument", "ArgumentNull", "ArgumentOutOfRange", "NotSupported",
+                "KeyNotFound", "Json",
             }));
         }
 
@@ -965,7 +966,237 @@ public class Sample
         }
 
         [Test]
-        public void GenericRestrictions_RejectListTypeReferences()
+        public void CollectionSyntaxLowering_RewritesTypedListOperations()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System.Collections.Generic;
+public class Sample
+{
+    public int[] Run()
+    {
+        List<int> values = new List<int> { 1, 2 };
+        values.Add(3);
+        values[1] = 4;
+        int first = values[0];
+        return values.ToArray();
+    }
+}");
+
+            Compiler.Lowering.CollectionSyntaxLoweringResult result =
+                RewriteCollectionsWithSemantics(source);
+            string lowered = result.Tree.GetRoot().ToFullString();
+
+            Assert.That(result.Changed, Is.True);
+            Assert.That(result.Diagnostics, Is.Empty);
+            Assert.That(lowered, Does.Contain("VRC.SDK3.Data.DataList"));
+            Assert.That(lowered, Does.Contain("__lcg_list"));
+            Assert.That(lowered, Does.Not.Contain("new List<int>"));
+        }
+
+        [Test]
+        public void CollectionSyntaxLowering_RewritesTypedDictionaryOperations()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System.Collections.Generic;
+public class Sample
+{
+    public bool Run(out int value)
+    {
+        Dictionary<string, int> values = new Dictionary<string, int>
+        {
+            { ""one"", 1 },
+            [""two""] = 2,
+        };
+        values[""three""] = 3;
+        return values.TryGetValue(""three"", out value);
+    }
+}");
+
+            Compiler.Lowering.CollectionSyntaxLoweringResult result =
+                RewriteCollectionsWithSemantics(source);
+            string lowered = result.Tree.GetRoot().ToFullString();
+
+            Assert.That(result.Changed, Is.True);
+            Assert.That(result.Diagnostics, Is.Empty);
+            Assert.That(lowered, Does.Contain("VRC.SDK3.Data.DataDictionary"));
+            Assert.That(lowered, Does.Contain("__lcg_dictionary"));
+            Assert.That(lowered, Does.Not.Contain("new Dictionary<string, int>"));
+        }
+
+        [Test]
+        public void CollectionSyntaxLowering_LeavesNativeDataContainersUntouched()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using VRC.SDK3.Data;
+public class Sample
+{
+    public DataList Run()
+    {
+        DataList values = new DataList();
+        values.Add(1);
+        return values;
+    }
+}");
+
+            Compiler.Lowering.CollectionSyntaxLoweringResult result =
+                RewriteCollectionsWithSemantics(source);
+
+            Assert.That(result.Changed, Is.False);
+            Assert.That(result.Diagnostics, Is.Empty);
+            Assert.That(result.Tree.GetRoot().ToFullString(), Is.EqualTo(source.GetRoot().ToFullString()));
+        }
+
+        [Test]
+        public void CollectionSyntaxLowering_RewritesJsonSerializerFacade()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System.Collections.Generic;
+using System.Text.Json;
+public class Sample
+{
+    public string Run(List<int> values)
+    {
+        System.Text.Json.JsonSerializerOptions options =
+            new JsonSerializerOptions { WriteIndented = true };
+        return JsonSerializer.Serialize(values, options);
+    }
+}");
+
+            Compiler.Lowering.CollectionSyntaxLoweringResult result =
+                RewriteCollectionsWithSemantics(source);
+            string lowered = result.Tree.GetRoot().ToFullString();
+
+            Assert.That(result.Diagnostics, Is.Empty);
+            Assert.That(lowered, Does.Contain("VRCJson.TrySerializeToJson"));
+            Assert.That(lowered, Does.Contain("JsonExportType.Beautify"));
+            Assert.That(lowered, Does.Not.Contain("JsonSerializer.Serialize"));
+        }
+
+        [Test]
+        public void CollectionSyntaxLowering_UsesTaggedEnvelopeForNonStringDictionaryKeys()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System.Collections.Generic;
+using System.Text.Json;
+public class Sample
+{
+    public string Run(Dictionary<int, string> values) => JsonSerializer.Serialize(values);
+}");
+
+            Compiler.Lowering.CollectionSyntaxLoweringResult result =
+                RewriteCollectionsWithSemantics(source);
+            string lowered = result.Tree.GetRoot().ToFullString();
+
+            Assert.That(result.Diagnostics, Is.Empty);
+            Assert.That(lowered, Does.Contain("$lcgDictionary"));
+            Assert.That(lowered, Does.Contain("entries"));
+        }
+
+        [Test]
+        public void CollectionSyntaxLowering_ComposesSyncedCollectionCallbacks()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System.Collections.Generic;
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.Manual)]
+public class Sample : UdonSharpBehaviour
+{
+    [UdonSynced, System.NonSerialized] private List<int> values = new List<int>();
+    public override void OnPreSerialization() { values.Add(1); }
+}");
+
+            Compiler.Lowering.CollectionSyntaxLoweringResult result =
+                RewriteCollectionsWithSemantics(source);
+            string lowered = result.Tree.GetRoot().ToFullString();
+
+            Assert.That(result.Diagnostics, Is.Empty);
+            Assert.That(lowered, Does.Contain("__lcg_sync_values"));
+            Assert.That(lowered, Does.Contain("trySerializeCore"));
+            Assert.That(lowered, Does.Contain("OnDeserialization"));
+            Assert.That(lowered, Does.Not.Contain("[UdonSynced, System.NonSerialized]"));
+        }
+
+        [Test]
+        public void CollectionSyntaxLowering_RejectsInspectorSerializedCollectionFields()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System.Collections.Generic;
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.Manual)]
+public class Sample : UdonSharpBehaviour
+{
+    [UdonSynced] public List<int> values;
+}");
+
+            Compiler.Lowering.CollectionSyntaxLoweringResult result =
+                RewriteCollectionsWithSemantics(source);
+
+            Assert.That(result.Diagnostics.Select(diagnostic => diagnostic.Message),
+                Has.Some.Contains("Inspector serialization"));
+        }
+
+        [Test]
+        public void CollectionSyntaxLowering_LowersDictionaryForeachToKeySnapshot()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System.Collections.Generic;
+public class Sample
+{
+    public int Sum(Dictionary<string, int> values)
+    {
+        int sum = 0;
+        foreach (KeyValuePair<string, int> pair in values)
+            sum += pair.Value;
+        return sum;
+    }
+}");
+
+            Compiler.Lowering.CollectionSyntaxLoweringResult result =
+                RewriteCollectionsWithSemantics(source);
+            string lowered = result.Tree.GetRoot().ToFullString();
+
+            Assert.That(result.Diagnostics, Is.Empty);
+            Assert.That(lowered, Does.Contain("GetKeys"));
+            Assert.That(lowered, Does.Contain("__lcg_foreach_value"));
+            Assert.That(lowered, Does.Not.Contain("KeyValuePair<string, int> pair"));
+        }
+
+        [Test]
+        public void CollectionSyntaxLowering_RejectsCollectionInterfaces()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System.Collections.Generic;
+public class Sample { private IList<int> values; }");
+
+            Compiler.Lowering.CollectionSyntaxLoweringResult result =
+                RewriteCollectionsWithSemantics(source);
+
+            Assert.That(result.Diagnostics.Select(diagnostic => diagnostic.Message),
+                Has.Some.Contains("exact List<T> or Dictionary<TKey,TValue>"));
+        }
+
+        [Test]
+        public void CollectionSyntaxLowering_DoesNotRewriteUserLookalikes()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+namespace Custom
+{
+    public class List<T> { public void Add(T value) { } }
+    public class Sample
+    {
+        public void Run() { var values = new List<int>(); values.Add(1); }
+    }
+}");
+
+            Compiler.Lowering.CollectionSyntaxLoweringResult result =
+                RewriteCollectionsWithSemantics(source);
+
+            Assert.That(result.Changed, Is.False);
+            Assert.That(result.Diagnostics, Is.Empty);
+        }
+
+        [Test]
+        public void GenericRestrictions_AllowExactListForSemanticLowering()
         {
             CSharpCompilation compilation = CreateGenericRestrictionCompilation(@"
 using System.Collections.Generic;
@@ -976,7 +1207,7 @@ public class Sample { public List<int> Values; }");
             string violation = Compiler.GenericRestrictionPolicy.GetViolation(
                 listType, Compiler.GenericUseSite.TypeReference);
 
-            Assert.That(violation, Does.Contain("List<T>"));
+            Assert.That(violation, Is.Null);
         }
 
         [Test]
@@ -992,7 +1223,7 @@ public class Sample { public Wrapper<List<int>> Values; }");
             string violation = Compiler.GenericRestrictionPolicy.GetViolation(
                 wrapperType, Compiler.GenericUseSite.TypeReference);
 
-            Assert.That(violation, Does.Contain("List<T>"));
+            Assert.That(violation, Does.Contain("generic heap object"));
         }
 
         [Test]
@@ -1007,7 +1238,7 @@ public class Sample { public DerivedList Values; }");
             string violation = Compiler.GenericRestrictionPolicy.GetViolation(
                 derivedListType, Compiler.GenericUseSite.TypeReference);
 
-            Assert.That(violation, Does.Contain("List<T>"));
+            Assert.That(violation, Does.Contain("generic heap object"));
         }
 
         [Test]
@@ -1102,12 +1333,12 @@ public class IntBox : Box<int> { }");
         }
 
         [Test]
-        public void GenericRestrictions_MetadataReferenceExemptionDoesNotAllowAllocationOrRuntimeTypes()
+        public void GenericRestrictions_OtherGenericHeapTypesStillRejectAllocationAndRuntimeUse()
         {
-            CSharpCompilation compilation = CreateGenericRestrictionCompilation("public class Sample { }");
-            INamedTypeSymbol type = compilation.GetTypeByMetadataName("System.Collections.Generic.Dictionary`2")
-                .Construct(compilation.GetSpecialType(SpecialType.System_Int32),
-                    compilation.GetSpecialType(SpecialType.System_Int32));
+            CSharpCompilation compilation = CreateGenericRestrictionCompilation(
+                "public class GenericBox<T> { } public class Sample { }");
+            INamedTypeSymbol type = compilation.GetTypeByMetadataName("GenericBox`1")
+                .Construct(compilation.GetSpecialType(SpecialType.System_Int32));
 
             Assert.That(Compiler.GenericRestrictionPolicy.GetViolation(
                 type, Compiler.GenericUseSite.ObjectCreation), Does.Contain("generic heap objects"));
@@ -1229,6 +1460,26 @@ public class Invalid : First, Second { }");
             CSharpCompilation compilation = CSharpCompilation.Create("ExtendedSemanticTest", new[] { tree },
                 references, new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
             return Compiler.Lowering.ExtendedSyntaxLowerer.Rewrite(tree, declaration => true,
+                compilation.GetSemanticModel(tree));
+        }
+
+        private static Compiler.Lowering.CollectionSyntaxLoweringResult RewriteCollectionsWithSemantics(
+            SyntaxTree tree)
+        {
+            MetadataReference[] references = new[]
+                {
+                    typeof(object).Assembly.Location,
+                    typeof(System.Collections.Generic.List<>).Assembly.Location,
+                    typeof(VRC.SDK3.Data.DataList).Assembly.Location,
+                    typeof(System.Text.Json.JsonSerializer).Assembly.Location,
+                }
+                .Distinct()
+                .Select(location => MetadataReference.CreateFromFile(location))
+                .ToArray();
+            CSharpCompilation compilation = CSharpCompilation.Create("CollectionSemanticTest",
+                new[] { tree }, references,
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            return Compiler.Lowering.CollectionSyntaxLowerer.Rewrite(tree, declaration => true,
                 compilation.GetSemanticModel(tree));
         }
 

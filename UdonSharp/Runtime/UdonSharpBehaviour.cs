@@ -661,6 +661,8 @@ namespace UdonSharp
         ArgumentNull,
         ArgumentOutOfRange,
         NotSupported,
+        KeyNotFound,
+        Json,
     }
 
     /// <summary>

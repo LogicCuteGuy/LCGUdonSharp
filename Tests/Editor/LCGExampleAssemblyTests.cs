@@ -9,6 +9,7 @@ using UnityEditor;
 using UnityEditor.Compilation;
 using UnityEngine;
 using UnityEngine.TestTools;
+using VRC.SDK3.Data;
 
 namespace LogicCuteGuy.LCGUdonSharp.Installer.Tests
 {
@@ -109,7 +110,68 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer.Tests
                 Assert.That(assembly, Is.Not.Empty, programAssetPath + " emitted no UASM.");
                 Assert.That(assembly, Does.Contain("_interact"),
                     programAssetPath + " did not emit its Interact entry point.");
+                if (scriptPath.EndsWith("ListTypesExample.cs", System.StringComparison.Ordinal))
+                {
+                    Assert.That(assembly, Does.Contain("VRCSDK3DataDataList"));
+                    Assert.That(assembly, Does.Contain("VRCSDK3DataDataDictionary"));
+                    Assert.That(assembly, Does.Contain("VRCSDK3DataVRCJson.__TrySerializeToJson"));
+                    Assert.That(assembly, Does.Contain("VRCSDK3DataVRCJson.__TryDeserializeFromJson"));
+                    Assert.That(assembly, Does.Contain("VRCSDK3DataDataToken.__Bitcast"));
+                    Assert.That(assembly, Does.Contain("__lcg_sync_syncedValues"));
+                }
             }
+        }
+
+        [Test]
+        public void CollectionJsonBinaryAndSyncExample_ExecutesInUdonVm()
+        {
+            const string assetPath =
+                "Packages/com.logiccuteguy.lcgudonsharp/Example/GenericRestrictions/ListTypesExample.asset";
+            var asset = AssetDatabase.LoadAssetAtPath<UdonSharp.UdonSharpProgramAsset>(assetPath);
+            Assert.That(asset, Is.Not.Null);
+
+            var program = asset.SerializedProgramAsset.RetrieveProgram();
+            var vm = VRC.Udon.Editor.UdonEditorManager.Instance.ConstructUdonVM();
+            vm.LoadProgram(program);
+
+            vm.SetProgramCounter(program.EntryPoints.GetAddressFromSymbol("RunCollectionValidation"));
+            Assert.That(vm.Interpret(), Is.Zero);
+            Assert.That(program.Heap.GetHeapVariable<int>(
+                program.SymbolTable.GetAddressFromSymbol("jsonRoundTripCount")), Is.EqualTo(4));
+            Assert.That(program.Heap.GetHeapVariable<int>(
+                program.SymbolTable.GetAddressFromSymbol("binaryRoundTripValue")), Is.EqualTo(1065353465));
+
+            vm.SetProgramCounter(program.EntryPoints.GetAddressFromSymbol("_onPreSerialization"));
+            Assert.That(vm.Interpret(), Is.Zero);
+            string payload = program.Heap.GetHeapVariable<string>(
+                program.SymbolTable.GetAddressFromSymbol("__lcg_sync_syncedValues"));
+            Assert.That(payload, Is.EqualTo("[]"));
+
+            program.Heap.SetHeapVariable(
+                program.SymbolTable.GetAddressFromSymbol("__lcg_sync_syncedValues"), "[5,6]");
+            vm.SetProgramCounter(program.EntryPoints.GetAddressFromSymbol("_onDeserialization"));
+            Assert.That(vm.Interpret(), Is.Zero);
+            DataList values = program.Heap.GetHeapVariable<DataList>(
+                program.SymbolTable.GetAddressFromSymbol("syncedValues"));
+            Assert.That(values.Count, Is.EqualTo(2));
+            Assert.That((int)values[0], Is.EqualTo(5));
+            Assert.That((int)values[1], Is.EqualTo(6));
+
+            program.Heap.SetHeapVariable(
+                program.SymbolTable.GetAddressFromSymbol("__lcg_sync_syncedValues"), "{");
+            LogAssert.Expect(LogType.Error,
+                new Regex("Failed to deserialize synchronized collection 'syncedValues':"));
+            vm.SetProgramCounter(program.EntryPoints.GetAddressFromSymbol("_onDeserialization"));
+            Assert.That(vm.Interpret(), Is.Zero);
+            Assert.That(program.Heap.GetHeapVariable<DataList>(
+                program.SymbolTable.GetAddressFromSymbol("syncedValues")).Count, Is.EqualTo(2));
+
+            program.Heap.SetHeapVariable(
+                program.SymbolTable.GetAddressFromSymbol("__lcg_sync_syncedValues"), "");
+            vm.SetProgramCounter(program.EntryPoints.GetAddressFromSymbol("_onDeserialization"));
+            Assert.That(vm.Interpret(), Is.Zero);
+            Assert.That(program.Heap.GetHeapVariable<DataList>(
+                program.SymbolTable.GetAddressFromSymbol("syncedValues")), Is.Null);
         }
 
         [Test]
@@ -282,7 +344,6 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer.Tests
                 "## Open generics",
                 "## Generic behaviours",
                 "## Generic heap objects",
-                "## List<T>",
                 "## Unsupported interface members",
                 "## Multiple concrete bases",
             };
@@ -303,6 +364,11 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer.Tests
                 Assert.That(sectionBody, Does.Contain("**Replacement**"),
                     section + " needs a clearly labelled replacement example.");
             }
+
+            Assert.That(guide, Does.Contain("## Collections, JSON, bytes, and bits"));
+            Assert.That(guide, Does.Contain("List<int> values"));
+            Assert.That(guide, Does.Contain("Dictionary<string, int> scores"));
+            Assert.That(guide, Does.Contain("IList<int> interfaceValues"));
 
             string[] requiredTopics =
             {

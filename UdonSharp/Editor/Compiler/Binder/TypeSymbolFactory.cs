@@ -22,14 +22,16 @@ namespace UdonSharp.Compiler
     {
         public static string GetViolation(ITypeSymbol type, GenericUseSite useSite)
         {
-            string listViolation = GetListViolation(type);
-            if (listViolation != null)
-                return listViolation;
-
             if (type is IArrayTypeSymbol arrayType)
                 return GetViolation(arrayType.ElementType, useSite);
 
             if (!(type is INamedTypeSymbol namedType))
+                return null;
+
+            // Exact List<T> and Dictionary<TKey,TValue> instances are erased by the semantic
+            // collection pass before binding. Derived types and interfaces deliberately do not
+            // receive this exemption and fall through to the generic heap diagnostics below.
+            if (IsLoweredCollection(namedType))
                 return null;
 
             if (namedType.IsUnboundGenericType)
@@ -84,6 +86,15 @@ namespace UdonSharp.Compiler
                    definition.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks";
         }
 
+        private static bool IsLoweredCollection(INamedTypeSymbol type)
+        {
+            INamedTypeSymbol definition = type.OriginalDefinition;
+            if (definition.ContainingNamespace?.ToDisplayString() != "System.Collections.Generic")
+                return false;
+            return definition.Name == "List" && definition.Arity == 1 ||
+                   definition.Name == "Dictionary" && definition.Arity == 2;
+        }
+
         private static bool ContainsOpenTypeParameter(ITypeSymbol type)
         {
             if (type.TypeKind == TypeKind.TypeParameter)
@@ -94,42 +105,6 @@ namespace UdonSharp.Compiler
 
             return type is INamedTypeSymbol namedType &&
                    namedType.TypeArguments.Any(ContainsOpenTypeParameter);
-        }
-
-        private static string GetListViolation(ITypeSymbol type)
-        {
-            return GetListViolation(type, new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default));
-        }
-
-        private static string GetListViolation(ITypeSymbol type, HashSet<ITypeSymbol> visitedTypes)
-        {
-            if (type == null || !visitedTypes.Add(type))
-                return null;
-
-            if (type is IArrayTypeSymbol arrayType)
-                return GetListViolation(arrayType.ElementType, visitedTypes);
-
-            if (!(type is INamedTypeSymbol namedType))
-                return null;
-
-            INamedTypeSymbol definition = namedType.OriginalDefinition;
-            if (definition.Arity == 1 &&
-                definition.Name == "List" &&
-                definition.ContainingNamespace?.ToDisplayString() == "System.Collections.Generic")
-                return "List<T> is not supported by U#; use an array or a VRCUrl-style Udon-safe container instead.";
-
-            foreach (ITypeSymbol typeArgument in namedType.TypeArguments)
-            {
-                string violation = GetListViolation(typeArgument, visitedTypes);
-                if (violation != null)
-                    return violation;
-            }
-
-            string baseViolation = GetListViolation(namedType.BaseType, visitedTypes);
-            if (baseViolation != null)
-                return baseViolation;
-
-            return null;
         }
 
         public static string GetUnsupportedInterfaceMemberViolation(ISymbol member)

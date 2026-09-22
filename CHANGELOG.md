@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added semantic lowering for exact `List<T>` and `Dictionary<TKey,TValue>` types to VRChat data containers, including constructors, initializers, typed access, iteration, common mutation/search APIs, and familiar compiler-managed failures.
+- Added a VRCJson-backed `System.Text.Json` intrinsic facade, tagged non-string dictionary keys, strict numeric conversion, Manual-mode JSON synchronization for collection fields, and runnable JSON/byte/bit examples.
 - Added synchronous compiler-managed `try`/`catch`/`finally`, typed and catch-all handlers, explicit throws and rethrows, `UdonException` payloads, protected same-behaviour propagation, and guarded null, bounds, and integral divide/modulo failures.
 - Added exported-event cleanup/logging for uncaught emulated exceptions and targeted diagnostics for unsupported exception syntax and `await` inside `try`.
 - Added manual `[LCGPacket]` field and method lowering with targeted PlayerObject mailbox delivery.
