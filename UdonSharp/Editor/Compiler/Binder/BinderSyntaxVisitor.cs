@@ -406,7 +406,9 @@ namespace UdonSharp.Compiler.Binder
             TypeSymbol intType = Context.GetTypeSymbol(SpecialType.System_Int32);
             BoundExpression message;
             BoundExpression code = new BoundConstantExpression(0, intType, creation);
-            BoundExpression operation = new BoundConstantExpression(null, stringType, creation);
+            // Select the value overload: a bare null selects IConstantValue and
+            // leaves the constant wrapper null, which crashes during emission.
+            BoundExpression operation = new BoundConstantExpression((object)null, stringType, creation);
             int kind;
 
             if (typeName == "UdonSharp.UdonException")

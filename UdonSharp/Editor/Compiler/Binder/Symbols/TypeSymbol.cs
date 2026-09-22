@@ -102,7 +102,9 @@ namespace UdonSharp.Compiler.Symbols
             if (_bound)
                 return;
 
-            if (IsArray)
+            // Compiler-owned metadata enums use user-enum storage, but have no
+            // source declaration or member bodies to bind.
+            if (IsArray || (IsEnum && RoslynSymbol.DeclaringSyntaxReferences.IsEmpty))
             {
                 _bound = true;
                 return;

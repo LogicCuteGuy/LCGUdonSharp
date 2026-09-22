@@ -83,6 +83,14 @@ namespace UdonSharp.Compiler.Symbols
         {
             if (IsBound)
                 return;
+
+            // Metadata enum constants already carry their type and value.
+            // There is no source initializer to visit.
+            if (ContainingType.IsEnum && IsConst && RoslynSymbol.DeclaringSyntaxReferences.IsEmpty)
+            {
+                _resolved = true;
+                return;
+            }
             
             if (!RoslynSymbol.IsImplicitlyDeclared)
             {

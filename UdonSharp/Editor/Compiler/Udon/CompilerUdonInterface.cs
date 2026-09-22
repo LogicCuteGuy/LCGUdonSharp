@@ -229,6 +229,11 @@ namespace UdonSharp.Compiler.Udon
 
         public static bool IsExternType(Type type)
         {
+            // Match the binder: this runtime enum is compiler-owned and stored
+            // as an integer, not an exposed Udon enum.
+            if (type == typeof(UdonExceptionKind))
+                return false;
+
             AssemblyCacheInit();
             return ExternAssemblySet.Contains(type.Assembly);
         }

@@ -257,7 +257,11 @@ namespace UdonSharp
 
             if (IsUserDefinedType(type))
             {
-                if (type.IsArray)
+                if (type.IsEnum)
+                {
+                    udonType = type.GetEnumUnderlyingType();
+                }
+                else if (type.IsArray)
                 {
                     if (!type.GetElementType().IsArray)
                     {

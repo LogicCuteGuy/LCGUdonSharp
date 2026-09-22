@@ -52,7 +52,9 @@ namespace UdonSharp.Compiler.Binder
 
         public static System.Reflection.Assembly GetExternAssembly(this INamedTypeSymbol typeSymbol)
         {
-            if (!typeSymbol.IsExternType())
+            // Metadata location determines reflection lookup independently of
+            // whether the compiler exposes the type directly to Udon.
+            if (typeSymbol.Locations.FirstOrDefault()?.IsInMetadata != true)
                 return null;
 
             return typeSymbol.Locations.FirstOrDefault()?.MetadataModule?.GetMetadata().GetAssemblyFromMetadata();
@@ -60,6 +62,12 @@ namespace UdonSharp.Compiler.Binder
 
         public static bool IsExternType(this ITypeSymbol typeSymbol)
         {
+            // This compiler-owned enum is in runtime metadata, but is not an
+            // exposed Udon type. Use normal user-enum lowering to integer storage.
+            if (typeSymbol.TypeKind == TypeKind.Enum &&
+                typeSymbol.ToDisplayString() == typeof(UdonExceptionKind).FullName)
+                return false;
+
             return typeSymbol.Locations.FirstOrDefault()?.IsInMetadata ?? false;
         }
 
