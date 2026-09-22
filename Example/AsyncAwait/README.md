@@ -1,5 +1,7 @@
 # Async/await UdonSharp example
 
+> Documentation version: **0.3.1** · [All examples](../README.md) · [Package guide](../../README.md)
+
 This folder contains real U# examples for the build-time async lowering:
 
 - `AsyncYieldDelayExample` uses `Task.Yield()` and `Task.Delay(int)`;

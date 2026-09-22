@@ -1,5 +1,7 @@
 # UdonSharp Interface Example
 
+> Documentation version: **0.3.1** · [All examples](../README.md) · [Package guide](../../README.md)
+
 This example demonstrates one interface with two independent `UdonSharpBehaviour`
 implementations. `InterfaceExampleRunner` invokes both implementations through
 `INumberOperation` and reads the interface property afterward.

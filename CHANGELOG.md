@@ -1,5 +1,10 @@
 # LCGUdonSharp Changelog
 
+## 0.3.1 - 2026-09-23
+
+- Refreshed every README with a consistent documentation-version marker and navigation links between the package guide and runnable examples.
+- Clarified that the example documentation applies to the 0.3.x feature set.
+
 ## 0.3.0 - 2026-09-23
 
 - Added editor proxy serialization for exact C# collections, including nested collections, collection arrays, exact primitive and enum tokens, and distinct null/empty values.

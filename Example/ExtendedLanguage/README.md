@@ -1,5 +1,7 @@
 # Extended language examples
 
+> Documentation version: **0.3.1** · [All examples](../README.md) · [Package guide](../../README.md)
+
 These scripts are real UdonSharp behaviours with matching program assets. Add a component to a GameObject and interact with it to run the example.
 
 - `RefOutExample.cs` demonstrates local, field, one-dimensional array-element, `out var`, multiple-parameter, and recursive `ref`/`out` copy-back.
