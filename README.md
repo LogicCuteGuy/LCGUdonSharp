@@ -5,7 +5,7 @@
 [![Unity](https://img.shields.io/badge/Unity-2022.3-blue)](https://unity.com/)
 [![VRChat Worlds SDK](https://img.shields.io/badge/VRChat_Worlds_SDK-3.10.5-orange)](https://github.com/VRChat/worlds)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE.md)
-[![Package Version](https://img.shields.io/badge/version-0.3.1-informational)](package.json)
+[![Package Version](https://img.shields.io/badge/version-0.3.2-informational)](package.json)
 
 LCGUdonSharp extends the UdonSharp compiler with C# interfaces, synchronous compiler-managed `try`/`catch`, build-time `async/await` lowering, extended language constructs (`ref`/`out`, closed generics, LINQ closures, `dynamic`, `Span<T>`), and a manual packet networking layer — while keeping every modified source file inside `Packages/com.logiccuteguy.lcgudonsharp` instead of the VRChat SDK or `Assets`.
 

@@ -1,6 +1,6 @@
 # Generic and hierarchy build-time restrictions
 
-> Documentation version: **0.3.1** · [All examples](../README.md) · [Package guide](../../README.md)
+> Documentation version: **0.3.2** · [All examples](../README.md) · [Package guide](../../README.md)
 
 This guide shows every generic or hierarchy shape that LCGUdonSharp rejects at
 build time and the supported replacement. Rejected examples are self-contained
