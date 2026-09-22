@@ -1,6 +1,6 @@
 # LCGUdonSharp examples
 
-Runnable UdonSharp behaviours for every LCGUdonSharp feature. Open **`TestLCGUdonSharp.unity`** to get a scene with the networking showcases wired up, or add any example component to a GameObject in your own scene.
+Runnable UdonSharp behaviours for every LCGUdonSharp 0.3.0 feature. Open **`TestLCGUdonSharp.unity`** to get a scene with the networking showcases wired up, or add any example component to a GameObject in your own scene.
 
 ## Folder map
 

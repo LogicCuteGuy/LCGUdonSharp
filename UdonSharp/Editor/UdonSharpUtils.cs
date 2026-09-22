@@ -255,6 +255,12 @@ namespace UdonSharp
             
             Type udonType = null;
 
+            if (Serialization.CollectionSerializer<object>.IsCollection(type))
+                udonType = type.GetGenericTypeDefinition() == typeof(List<>)
+                    ? typeof(VRC.SDK3.Data.DataList) : typeof(VRC.SDK3.Data.DataDictionary);
+            else if (type.IsArray && Serialization.CollectionSerializer<object>.IsCollection(type.GetElementType()))
+                udonType = UserTypeToUdonType(type.GetElementType()).MakeArrayType();
+
             if (IsUserDefinedType(type))
             {
                 if (type.IsEnum)

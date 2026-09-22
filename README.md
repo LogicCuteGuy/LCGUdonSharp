@@ -5,7 +5,7 @@
 [![Unity](https://img.shields.io/badge/Unity-2022.3-blue)](https://unity.com/)
 [![VRChat Worlds SDK](https://img.shields.io/badge/VRChat_Worlds_SDK-3.10.5-orange)](https://github.com/VRChat/worlds)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE.md)
-[![Package Version](https://img.shields.io/badge/version-0.2.0-informational)](package.json)
+[![Package Version](https://img.shields.io/badge/version-0.3.0-informational)](package.json)
 
 LCGUdonSharp extends the UdonSharp compiler with C# interfaces, synchronous compiler-managed `try`/`catch`, build-time `async/await` lowering, extended language constructs (`ref`/`out`, closed generics, LINQ closures, `dynamic`, `Span<T>`), and a manual packet networking layer — while keeping every modified source file inside `Packages/com.logiccuteguy.lcgudonsharp` instead of the VRChat SDK or `Assets`.
 
@@ -59,17 +59,7 @@ These names appear in the docs, the folder layout, and Unity's UI. Two of them s
 > **Rule of thumb:** one U# script needs one program asset with the **same name** in the **same folder**. One `.asmdef` needs one U# assembly definition, and its **name does not matter** (this package uses `*.USharp.asset`).
 
 ---
-runs automatically when Unity loads the project and again whenever the package list changes. It is **idempotent** — if an SDK/package refresh restores the bundled copy, setup runs again. On any SDK version other than `3.10.5`, setup stops instead of modifying an untested package.
 
-Everything setup writes outside the package source:
-
-| Path | Purpose |
-|------|---------|
-| `ProjectSettings/LogicCuteGuy.LCGUdonSharp.json` | Installer state: installer version, SDK version, and a `suspended` flag. The restore command sets `suspended` so automatic setup stays off. |
-| `Library/LogicCuteGuy.LCGUdonSharp/Backups` | Backed-up SDK-bundled UdonSharp, used by repair and restore. |
-| `Library/LogicCuteGuy.LCGUdonSharp` | Installer workspace (the `Backups` folder above lives inside it). |
-
-Setup and restore also recognize the legacy locations used by earlier versions — `Assets/LogicCuteGuy/UdonSharpInterface/UdonSharp`, `Assets/LogicCuteGuy/LCGUdonSharp/UdonSharp`, `Packages/com.logiccuteguy.lcgudonsharp.compiler`, plus the old state/workspace names `ProjectSettings/LogicCuteGuy.UdonSharpInterface.json` and `Library/LogicCuteGuy.UdonSharpInterface` — so upgrades from an old layout converge on a single copy
 ## How It Works
 
 ### 1. Automatic installer
@@ -87,6 +77,16 @@ After the package is imported, a small bootstrap assembly (`Editor/LCGUdonSharpI
 ```
 
 Setup is **idempotent** — if an SDK/package refresh restores the bundled copy, setup runs again. On any SDK version other than `3.10.5`, setup stops instead of modifying an untested package.
+
+Everything setup writes outside the package source:
+
+| Path | Purpose |
+|------|---------|
+| `ProjectSettings/LogicCuteGuy.LCGUdonSharp.json` | Installer state, SDK version, and automatic-setup suspension flag. |
+| `Library/LogicCuteGuy.LCGUdonSharp/Backups` | Backed-up SDK-bundled UdonSharp, used by repair and restore. |
+| `Library/LogicCuteGuy.LCGUdonSharp` | Installer workspace. |
+
+Setup and restore also recognize legacy install, state, and workspace locations so upgrades converge on one compiler copy.
 
 ### 2. Compiler extensions
 
@@ -251,7 +251,7 @@ catch (ArgumentException exception)
 }
 catch (UdonException exception)
 {
-    Debug.LogError(exception.Operation + ": " + exception.Mes[Udon extern](#key-terms) (a built-in node such as `Debug.Log` or `transform.Rotate`)
+    Debug.LogError(exception.Operation + ": " + exception.Message);
 }
 finally
 {
@@ -282,6 +282,8 @@ Also supported: closed generic static helpers, closed generic interface diamonds
 ### Collections, JSON, bytes, and bits
 
 Exact `List<T>` and `Dictionary<TKey,TValue>` types can be written with ordinary C# syntax. The compiler lowers them to VRChat `DataList`, `DataDictionary`, and `DataToken` operations; existing code that directly uses those SDK types or `VRCJson` is left unchanged.
+
+Version 0.3.0 also serializes collection fields and arrays of collections between their C# proxy values and lowered Udon storage. Null and empty collections remain distinct, nested collections preserve their container types, and primitive or enum elements retain their exact token representation.
 
 ```csharp
 using System.Collections.Generic;
@@ -448,26 +450,29 @@ Zone colliders in separate hierarchies may overlap. Parent/child zone colliders 
 ---
 
 ## Menu Commands
-setup to re-run (backup + install + remove bundled copy). |
+
+| Command | Purpose |
+|---------|---------|
+| **Tools > LCGUdonSharp > Install or Repair** | Force setup to re-run (backup + install + remove bundled copy). |
 | **Tools > LCGUdonSharp > Restore VRChat UdonSharp and Disable Auto Setup** | Restore the SDK-bundled copy, remove the generated compiler folder, and suspend automatic setup — run this **before** uninstalling. |
 | **Assets > Create > U# Script** | Create a U# script **and** its paired program asset, already linked. Must be saved under `Assets/` or `Packages/`; anything else is refused. |
 | **Assets > Create > U# Assembly Definition** | Create a `UdonSharpAssemblyDefinition` registration asset. With the `.asmdef` selected it is assigned to `sourceAssembly` automatically. |
 | **VRChat SDK > Udon Sharp > Refresh All UdonSharp Assets** | Recompile every UdonSharp program asset in the project. |
 | **VRChat SDK > Udon Sharp > Force Upgrade** | Run the UdonSharp asset upgrader. |
 | **VRChat SDK > Udon Sharp > Class Exposure Tree** | Show which C# types and members are exposed to Udon. |
-| **VRChat SDK > Udon Sharp > Node Definition Grabber** | Dump the built-in Udon node (extern) definitions. | As the setting's own tooltip puts it: off *removes the diagnostic code*, on compiles the logs in — so the toggle only takes effect on the next compile.
+| **VRChat SDK > Udon Sharp > Node Definition Grabber** | Dump the built-in Udon node (extern) definitions. |
 | **VRChat SDK > Udon Sharp > Parse Logs from File** | Map Udon log output read from a file back to C# sources. |
-| **Edit > Easy Event Editor Settings** | Configure the Easy Event Editor used by the UdonSharp inspectors
-|------|--------|
-| **Tools > LCGUdonSharp > Install or Repair** | Force the installer to re-run (backup + install + remove bundled copy). |
-| **Tools > LCGUdonSharp > Restore VRChat UdonSharp and Disable Auto Setup** | Restore the SDK-bundled copy and remove the generated compiler folder — run this **before** uninstalling. |
+| **Edit > Easy Event Editor Settings** | Configure the Easy Event Editor used by the UdonSharp inspectors. |
 
 There are no example-builder menu commands; the example scene and paired `.asset` files ship with the package.
 
 ### Diagnostics
 
+| Symptom | Fix |
+|---------|-----|
 | Script compiles in Unity but UdonSharp ignores it | Its assembly is not registered. `Assembly-CSharp` is always scanned; scripts inside an `.asmdef` need a `UdonSharpAssemblyDefinition` (**Assets > Create > U# Assembly Definition**) pointing at that `.asmdef`. |
 | Edited a U# assembly definition but nothing recompiles | Changing `sourceAssembly` resets the compiler's assembly cache — run **VRChat SDK > Udon Sharp > Refresh All UdonSharp Assets** to rebuild. |
+
 LCG network logging is off by default. Enable **Edit > Project Settings > Udon Sharp > Debugging > LCG network diagnostics** before compiling to include pickup and packet-delivery output, then recompile UdonSharp programs.
 
 ---

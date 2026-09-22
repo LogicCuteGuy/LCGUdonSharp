@@ -173,6 +173,10 @@ VRChat `DataList` and `DataDictionary` values. The runnable
 indexers, mutation, `System.Text.Json`-style round trips, a Manual-mode synced
 list, UTF-8 bytes, `BitConverter`, `Buffer.BlockCopy`, and bitwise operators.
 
+In 0.3.0, editor proxy serialization uses the same lowered storage for fields,
+nested collections, and arrays of collections. Null and empty values stay
+distinct, and primitive or enum elements keep their exact `DataToken` type.
+
 ```csharp
 List<int> values = new List<int> { 1, 2, 3 };
 Dictionary<string, int> scores = new Dictionary<string, int>

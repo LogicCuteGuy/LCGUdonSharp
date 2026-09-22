@@ -1,7 +1,8 @@
 # LCGUdonSharp Changelog
 
-## Unreleased
+## 0.3.0 - 2026-09-23
 
+- Added editor proxy serialization for exact C# collections, including nested collections, collection arrays, exact primitive and enum tokens, and distinct null/empty values.
 - Added semantic lowering for exact `List<T>` and `Dictionary<TKey,TValue>` types to VRChat data containers, including constructors, initializers, typed access, iteration, common mutation/search APIs, and familiar compiler-managed failures.
 - Added a VRCJson-backed `System.Text.Json` intrinsic facade, tagged non-string dictionary keys, strict numeric conversion, Manual-mode JSON synchronization for collection fields, and runnable JSON/byte/bit examples.
 - Added synchronous compiler-managed `try`/`catch`/`finally`, typed and catch-all handlers, explicit throws and rethrows, `UdonException` payloads, protected same-behaviour propagation, and guarded null, bounds, and integral divide/modulo failures.

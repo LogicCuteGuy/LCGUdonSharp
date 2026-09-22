@@ -17,6 +17,7 @@ namespace UdonSharp.Serialization
         {
             new JaggedArraySerializer<object>(null), 
             new ArraySerializer<object>(null),
+            new CollectionSerializer<object>(null),
             // new UdonSharpBaseBehaviourSerializer(null),
             new UdonSharpBehaviourSerializer(null),
             new UnityObjectSerializer<UnityEngine.Object>(null),
