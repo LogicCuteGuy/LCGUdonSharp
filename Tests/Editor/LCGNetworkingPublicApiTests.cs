@@ -213,6 +213,24 @@ public class PacketReceiver
         }
 
         [Test]
+        public void UdonException_ExposesCompilerManagedPayload()
+        {
+            var exception = new UdonException(UdonExceptionKind.IndexOutOfRange,
+                "Index was outside the collection.", 17, "array-index");
+
+            Assert.That(exception, Is.InstanceOf<Exception>());
+            Assert.That(exception.Kind, Is.EqualTo(UdonExceptionKind.IndexOutOfRange));
+            Assert.That(exception.Message, Is.EqualTo("Index was outside the collection."));
+            Assert.That(exception.Code, Is.EqualTo(17));
+            Assert.That(exception.Operation, Is.EqualTo("array-index"));
+            Assert.That(Enum.GetNames(typeof(UdonExceptionKind)), Is.EquivalentTo(new[]
+            {
+                "Unknown", "Explicit", "NullReference", "IndexOutOfRange", "DivideByZero",
+                "InvalidOperation", "Argument", "ArgumentNull", "ArgumentOutOfRange", "NotSupported",
+            }));
+        }
+
+        [Test]
         public void Compiler_HasLowerPhaseAndSdkAdapterRegistry()
         {
             Assembly compilerAssembly = typeof(Compiler.UdonSharpCompilerV1).Assembly;
@@ -299,6 +317,26 @@ public class Sample { public async void Run() { await Task.Run(() => { }); } }")
             Assert.That(unsupportedResult.Diagnostics.Select(diagnostic => diagnostic.Message),
                 Has.Some.Contains("Only Task.Yield()"));
             Assert.That(unsupportedResult.Changed, Is.False);
+        }
+
+        [Test]
+        public void AsyncLowering_DiagnosesAwaitInsideTryPrecisely()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System.Threading.Tasks;
+public class Sample
+{
+    public async void Run()
+    {
+        try { await Task.Yield(); }
+        finally { }
+    }
+}");
+
+            Compiler.Lowering.AsyncSyntaxLoweringResult result = RewriteAsyncWithSemantics(source);
+            Assert.That(result.Changed, Is.False);
+            Assert.That(result.Diagnostics.Select(diagnostic => diagnostic.Message),
+                Has.Some.EqualTo("await inside try/catch/finally is not supported by synchronous compiler-managed exception handling."));
         }
 
         [Test]

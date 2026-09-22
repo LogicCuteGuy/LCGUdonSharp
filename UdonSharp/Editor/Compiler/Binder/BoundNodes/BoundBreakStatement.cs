@@ -12,7 +12,7 @@ namespace UdonSharp.Compiler.Binder
 
         public override void Emit(EmitContext context)
         {
-            context.Module.AddJump(context.TopBreakLabel);
+            context.EmitBreak();
         }
     }
 }

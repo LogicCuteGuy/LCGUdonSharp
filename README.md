@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE.md)
 [![Package Version](https://img.shields.io/badge/version-0.2.0-informational)](package.json)
 
-LCGUdonSharp extends the UdonSharp compiler with C# interfaces, build-time `async/await` lowering, extended language constructs (`ref`/`out`, closed generics, LINQ closures, `dynamic`, `Span<T>`), and a manual packet networking layer — while keeping every modified source file inside `Packages/com.logiccuteguy.lcgudonsharp` instead of the VRChat SDK or `Assets`.
+LCGUdonSharp extends the UdonSharp compiler with C# interfaces, synchronous compiler-managed `try`/`catch`, build-time `async/await` lowering, extended language constructs (`ref`/`out`, closed generics, LINQ closures, `dynamic`, `Span<T>`), and a manual packet networking layer — while keeping every modified source file inside `Packages/com.logiccuteguy.lcgudonsharp` instead of the VRChat SDK or `Assets`.
 
 ## Table of Contents
 
@@ -29,6 +29,7 @@ LCGUdonSharp extends the UdonSharp compiler with C# interfaces, build-time `asyn
 |---------|--------------|
 | **C# Interfaces** | Source-defined interfaces implemented by `UdonSharpBehaviour` classes — method calls, parameters, return values, properties, multiple implementations, interface arrays. |
 | **Async/Await** | Build-time lowering for `await Task.Yield()`, `await Task.Delay(int)`, and one VRChat SDK await per behaviour (string/image downloads, video, GPU readback, serialization, Creator Economy). |
+| **Synchronous Exceptions** | Compiler-managed `try`/`catch`/`finally`, explicit throws, rethrow, and guarded null, index, and integral divide/modulo failures without relying on unavailable Udon exception opcodes. |
 | **Extended Language** | `ref`/`out` (including `out var` and recursion), closed generics, interface diamonds, LINQ lambdas with captures, proven `dynamic`, array-backed `Span<T>`. |
 | **Manual Packet Networking** | `[LCGPacket]` fields and methods with versioned frames, authority checks, replay protection, field coalescing, verified-sender callbacks, targeted PlayerObject delivery. |
 | **Network Zones** | `LCGNetworkZone` scopes packet recipients and ownership to a trigger volume; manual object-sync replaces `VRC_ObjectSync` inside zones. |
@@ -63,6 +64,7 @@ Your C# source
    │
    ├─ interfaces ──────────► program-variable / custom-event ABI calls
    ├─ async/await ─────────► frame-pool continuation lowering
+   ├─ try/catch/finally ───► hidden payload state + guarded control flow
    ├─ ref/out, closures,
    │  closed generics,
    │  dynamic, Span<T> ────► concrete array/offset/length locals + loops
@@ -202,6 +204,31 @@ Supported awaits: parameterless `async void` methods, straight-line `Task.Yield(
 
 Constraints: each async method is single-flight (a second call while the continuation is pending is ignored); string completion is correlated by URL, so don't start another request with the same URL on the behaviour while one is pending. Locals, parameters, nested awaits, explicit returns, and assigning `Task<T>` results directly still produce build diagnostics. Full details in [`Example/AsyncAwait/README.md`](Example/AsyncAwait/README.md).
 
+### Synchronous exception handling
+
+```csharp
+try
+{
+    LoadSlot(selectedIndex);
+}
+catch (ArgumentException exception)
+{
+    Debug.LogError(exception.Message);
+}
+catch (UdonException exception)
+{
+    Debug.LogError(exception.Operation + ": " + exception.Message);
+}
+finally
+{
+    isBusy = false;
+}
+```
+
+The compiler recognizes explicit `throw new` statements and guards null receivers, array/string indices, and integral division or modulo inside protected code and its same-behaviour call graph. `UdonException` carries `Kind`, `Code`, `Operation`, and `Message`; standard catch variables expose only `Message`. Catch-all clauses and `throw;` are supported, and all abrupt exits run applicable `finally` blocks.
+
+This is synchronous emulation. A real fault raised inside an Udon extern cannot be intercepted and still halts that behaviour. Custom events, network calls, other behaviours, floating-point division, overflow, casts, and SDK domain failures are exception boundaries or outside v1. `await` inside `try` is rejected with a targeted diagnostic; existing asynchronous callback/result behavior is unchanged. See [`ExceptionHandlingExample`](Example/ExtendedLanguage/ExceptionHandlingExample.cs).
+
 ### Extended language
 
 ```csharp
@@ -283,7 +310,7 @@ The `Example/` folder contains runnable scenes and scripts for every feature. Op
 | [`Example/Interfaces`](Example/Interfaces/README.md) | Interface MVP | `INumberOperation` with Add/Multiply implementations invoked through the interface. Input `10` → `15`, `30`. |
 | [`Example/Networking`](Example/Networking/README.md) | LCG manual packets | Coalesced packet fields with callbacks, broadcast/targeted packet methods, zone-scoped object sync. |
 | [`Example/GenericRestrictions`](Example/GenericRestrictions/README.md) | Build-time diagnostics | Bad/good pairs for open generics, `List<T>`, interface contracts, multiple bases, `Task<T>`. |
-| [`Example/ExtendedLanguage`](Example/ExtendedLanguage/README.md) | Extended C# | `ref`/`out`, closed generics & interface diamonds, LINQ closures, `dynamic`, `Span<T>`. |
+| [`Example/ExtendedLanguage`](Example/ExtendedLanguage/README.md) | Extended C# | `try`/`catch`/`finally`, `ref`/`out`, closed generics & interface diamonds, LINQ closures, `dynamic`, `Span<T>`. |
 
 ### Quick start: run an example
 
@@ -313,6 +340,7 @@ Every UdonSharp `.cs` needs a paired `.asset` UdonSharpProgramAsset (same basena
 - Proven `dynamic` (single concrete type substituted at build time)
 - Array-backed local `Span<T>` (indexing, `Length`, `Fill`, `ToArray`, `Clear`)
 - `[LCGPacket]` fields and `void` methods (≤ 8 args), zones, PlayerObject mailboxes
+- Synchronous `try`/`catch`/`finally`, approved typed catches, catch-all, explicit `throw new`, rethrow, and guarded null/bounds/integral-zero failures
 
 </details>
 
@@ -322,6 +350,8 @@ Every UdonSharp `.cs` needs a paired `.asset` UdonSharpProgramAsset (same basena
 - Open generics (`typeof(Converter<>)`), generic behaviours, generic heap objects, `List<T>`
 - Generic interfaces/methods, interface inheritance, default/static interface members, events, indexers, explicit interface implementations
 - Nested awaits, explicit returns in async, direct `Task<T>` result assignment, multiple simultaneous SDK awaits
+- `await` inside `try`, catch filters, arbitrary thrown expressions, unsupported exception types/constructors/members, and catch variables that escape their catch
+- Catching native extern/VM faults, cross-behaviour or custom-event propagation, floating-point divide-by-zero, overflow, invalid casts, or SDK domain failures
 - Continuous Rigidbody behaviours and networked Udon Graph behaviours **inside zones**
 - Overlapping parent/child zones; `[UdonSynced]` fields under a zone (fail closed until per-zone variants ship)
 

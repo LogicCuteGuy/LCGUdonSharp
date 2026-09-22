@@ -81,11 +81,21 @@ namespace UdonSharp.Compiler.Binder
             return BindAccess(instance[0]);
         }
 
+        protected virtual void EmitAccessGuards(EmitContext context, BoundExpression instanceExpression,
+            BoundExpression[] parameterExpressions)
+        {
+            if (instanceExpression != null && !instanceExpression.IsThis)
+                context.EmitNullGuard(context.EmitValue(instanceExpression), $"property:{Property.Name}");
+        }
+
         public override Value EmitValue(EmitContext context)
         {
+            BoundExpression instanceExpression = GetInstanceExpression(context);
+            BoundExpression[] parameterExpressions = GetParameters(context);
+            EmitAccessGuards(context, instanceExpression, parameterExpressions);
             BoundInvocationExpression invocationExpression = BoundInvocationExpression.CreateBoundInvocation(context, SyntaxNode, 
                 Property.GetMethod,
-                GetInstanceExpression(context), GetParameters(context));
+                instanceExpression, parameterExpressions);
 
             if (_isBaseCall)
                 invocationExpression.MarkForcedBaseCall();
@@ -96,10 +106,12 @@ namespace UdonSharp.Compiler.Binder
         public override Value EmitSet(EmitContext context, BoundExpression valueExpression)
         {
             BoundExpression instanceValue = GetInstanceExpression(context);
+            BoundExpression[] parameterExpressions = GetParameters(context, valueExpression);
+            EmitAccessGuards(context, instanceValue, parameterExpressions);
             
             BoundInvocationExpression invocationExpression = BoundInvocationExpression.CreateBoundInvocation(context, SyntaxNode,
                 Property.SetMethod,
-                instanceValue, GetParameters(context, valueExpression));
+                instanceValue, parameterExpressions);
             
             if (_isBaseCall)
                 invocationExpression.MarkForcedBaseCall();

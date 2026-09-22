@@ -738,9 +738,29 @@ namespace UdonSharp.Compiler.Binder
 
         private sealed class BoundBuiltinOperatorInvocationExpression : BoundExternInvocation
         {
+            private readonly bool _guardIntegralZero;
+            private readonly string _operation;
+
             public BoundBuiltinOperatorInvocationExpression(SyntaxNode node, AbstractPhaseContext context, MethodSymbol method, BoundExpression[] operandExpressions)
                 :base(node, context, method, null, operandExpressions)
             {
+                Type operandType = operandExpressions[0].ValueType.UdonType.SystemType;
+                _guardIntegralZero = UdonSharpUtils.IsIntegerType(operandType) &&
+                    (method.Name.Contains("Division") || method.Name.Contains("Remainder") ||
+                     (method is IExternSymbol externSymbol &&
+                      (externSymbol.ExternSignature.Contains("Division") || externSymbol.ExternSignature.Contains("Remainder"))));
+                _operation = method.Name.Contains("Remainder") ? "integral-modulo" : "integral-division";
+            }
+
+            public override Value EmitValue(EmitContext context)
+            {
+                if (_guardIntegralZero)
+                {
+                    Value[] operands = GetParameterValues(context);
+                    context.EmitIntegralZeroGuard(operands[1], _operation);
+                }
+
+                return base.EmitValue(context);
             }
         }
         

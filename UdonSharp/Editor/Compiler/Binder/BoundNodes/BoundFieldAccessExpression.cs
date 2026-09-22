@@ -73,7 +73,10 @@ namespace UdonSharp.Compiler.Binder
                 Value.CowValue sourceValue = null;
 
                 if (!Field.IsStatic)
+                {
                     sourceValue = GetInstanceValue(context);
+                    context.EmitNullGuard(sourceValue.Value, $"field-set:{Field.Name}");
+                }
                 
                 Value expressionResult = context.EmitValue(valueExpression);
                 
@@ -101,7 +104,10 @@ namespace UdonSharp.Compiler.Binder
                 Value.CowValue sourceValue = null;
                 
                 if (!Field.IsStatic)
+                {
                     sourceValue = GetInstanceValue(context);
+                    context.EmitNullGuard(sourceValue.Value, $"field-get:{Field.Name}");
+                }
                 
                 if (sourceValue != null)
                     context.Module.AddPush(sourceValue.Value);

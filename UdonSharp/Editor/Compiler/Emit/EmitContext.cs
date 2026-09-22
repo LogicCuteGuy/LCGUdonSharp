@@ -34,8 +34,26 @@ namespace UdonSharp.Compiler.Emit
         private Stack<BlockScope> _blockScopeCache = new Stack<BlockScope>();
         private Stack<AssignmentScope> _assignmentScopes = new Stack<AssignmentScope>();
         private Stack<AssignmentScope> _assignmentScopeCache = new Stack<AssignmentScope>();
-        private Stack<JumpLabel> _continueLabelStack = new Stack<JumpLabel>();
-        private Stack<JumpLabel> _breakLabelStack = new Stack<JumpLabel>();
+        private struct ControlTransferTarget
+        {
+            public JumpLabel Label;
+            public int FinallyDepth;
+        }
+
+        private struct ExceptionHandlerTarget
+        {
+            public JumpLabel Label;
+            public int FinallyDepth;
+        }
+
+        private Stack<ControlTransferTarget> _continueLabelStack = new Stack<ControlTransferTarget>();
+        private Stack<ControlTransferTarget> _breakLabelStack = new Stack<ControlTransferTarget>();
+        private Stack<ExceptionHandlerTarget> _exceptionHandlerStack = new Stack<ExceptionHandlerTarget>();
+        private List<BoundStatement> _finallyStack = new List<BoundStatement>();
+        private readonly HashSet<MethodSymbol> _exceptionGuardedMethods = new HashSet<MethodSymbol>();
+        private readonly HashSet<MethodSymbol> _exceptionPropagationMethods = new HashSet<MethodSymbol>();
+        private int _guardedRegionDepth;
+        private bool _hasExceptionSupport;
 
         internal ValueTable TopTable => _valueTableStack.Peek();
         public ValueTable RootTable { get; }
@@ -45,6 +63,11 @@ namespace UdonSharp.Compiler.Emit
         private Value _lcgRuntimeValue;
         private Value _lcgReceiverIdValue;
         private Value _lcgZoneIdValue;
+        private Value _exceptionPendingValue;
+        private Value _exceptionKindValue;
+        private Value _exceptionCodeValue;
+        private Value _exceptionMessageValue;
+        private Value _exceptionOperationValue;
 
         internal MethodSymbol CurrentEmitMethod { get; private set; }
 
@@ -180,6 +203,7 @@ namespace UdonSharp.Compiler.Emit
 
             DeclaredFields = userFields.ToImmutableArray();
             DeclaredRootMethods = rootMethods.ToImmutableArray();
+            AnalyzeExceptionGuardedMethods(rootMethods);
             InitConstFields();
             InitializeLCGPacketAbi();
 
@@ -258,6 +282,127 @@ namespace UdonSharp.Compiler.Emit
 
             EnsureLCGPacketAbi();
         }
+
+        private void AnalyzeExceptionGuardedMethods(IEnumerable<MethodSymbol> rootMethods)
+        {
+            var reachableMethods = new HashSet<MethodSymbol>();
+            var reachableWork = new Stack<MethodSymbol>(rootMethods);
+            while (reachableWork.Count > 0)
+            {
+                MethodSymbol method = reachableWork.Pop();
+                if (method == null || !IsLocalExceptionMethod(method) || !reachableMethods.Add(method))
+                    continue;
+
+                if (method.DirectDependencies == null)
+                    continue;
+                foreach (MethodSymbol dependency in method.DirectDependencies.OfType<MethodSymbol>())
+                {
+                    foreach (MethodSymbol target in ResolveLocalExceptionTargets(dependency))
+                        reachableWork.Push(target);
+                }
+            }
+
+            var work = new Stack<MethodSymbol>();
+            foreach (MethodSymbol method in reachableMethods)
+            {
+                if (method.HasProtectedRegion)
+                {
+                    _hasExceptionSupport = true;
+                    foreach (MethodSymbol dependency in method.ProtectedDependencies)
+                    {
+                        foreach (MethodSymbol target in ResolveLocalExceptionTargets(dependency))
+                            work.Push(target);
+                    }
+                }
+            }
+
+            while (work.Count > 0)
+            {
+                MethodSymbol method = work.Pop();
+                if (method == null || method.IsExtern || !_exceptionGuardedMethods.Add(method))
+                    continue;
+
+                if (method.DirectDependencies == null)
+                    continue;
+
+                foreach (MethodSymbol dependency in method.DirectDependencies.OfType<MethodSymbol>())
+                {
+                    foreach (MethodSymbol target in ResolveLocalExceptionTargets(dependency))
+                        work.Push(target);
+                }
+            }
+
+            _exceptionPropagationMethods.UnionWith(_exceptionGuardedMethods);
+            _exceptionPropagationMethods.UnionWith(reachableMethods.Where(method => method.HasExplicitThrow));
+            bool changed;
+            do
+            {
+                changed = false;
+                foreach (MethodSymbol method in reachableMethods)
+                {
+                    if (_exceptionPropagationMethods.Contains(method) || method.DirectDependencies == null)
+                        continue;
+                    if (method.DirectDependencies.OfType<MethodSymbol>()
+                        .SelectMany(ResolveLocalExceptionTargets)
+                        .Any(_exceptionPropagationMethods.Contains))
+                    {
+                        _exceptionPropagationMethods.Add(method);
+                        changed = true;
+                    }
+                }
+            } while (changed);
+        }
+
+        private IEnumerable<MethodSymbol> ResolveLocalExceptionTargets(MethodSymbol method)
+        {
+            if (method == null || method.IsExtern)
+                yield break;
+
+            if (method.RoslynSymbol.ContainingType.TypeKind == TypeKind.Interface)
+            {
+                ISymbol implementation = EmitType.RoslynSymbol.FindImplementationForInterfaceMember(method.RoslynSymbol);
+                if (implementation is IMethodSymbol implementationMethod)
+                {
+                    MethodSymbol target = (MethodSymbol)GetSymbol(implementationMethod);
+                    target = GetMostDerivedMethod(target) ?? target;
+                    if (IsLocalExceptionMethod(target))
+                        yield return target;
+                }
+
+                yield break;
+            }
+
+            MethodSymbol resolvedMethod = GetMostDerivedMethod(method) ?? method;
+            if (IsLocalExceptionMethod(resolvedMethod))
+                yield return resolvedMethod;
+        }
+
+        private bool IsLocalExceptionMethod(MethodSymbol method)
+        {
+            if (method == null || method.IsExtern)
+                return false;
+            if (method.IsStatic || !method.ContainingType.IsUdonSharpBehaviour)
+                return true;
+
+            TypeSymbol currentType = EmitType;
+            while (currentType != null)
+            {
+                if (currentType == method.ContainingType)
+                    return true;
+                currentType = currentType.BaseType;
+            }
+
+            return false;
+        }
+
+        public bool IsExceptionGuardEnabled => _guardedRegionDepth > 0 ||
+                                               (CurrentEmitMethod != null && _exceptionGuardedMethods.Contains(CurrentEmitMethod));
+        private bool IsExceptionPropagationEnabled => _guardedRegionDepth > 0 ||
+                                                       (CurrentEmitMethod != null && _exceptionPropagationMethods.Contains(CurrentEmitMethod));
+        public bool HasExceptionSupport => _hasExceptionSupport;
+
+        public void EnterGuardedRegion() => _guardedRegionDepth++;
+        public void ExitGuardedRegion() => _guardedRegionDepth--;
 
         private void EnsureLCGPacketAbi()
         {
@@ -577,6 +722,201 @@ namespace UdonSharp.Compiler.Emit
             return RootTable.GetUdonThisValue(type);
         }
 
+        public Value ExceptionPendingValue => _exceptionPendingValue ??
+            (_exceptionPendingValue = RootTable.CreateGlobalInternalValue(GetTypeSymbol(SpecialType.System_Boolean), "exceptionPending"));
+
+        public Value ExceptionKindValue => _exceptionKindValue ??
+            (_exceptionKindValue = RootTable.CreateGlobalInternalValue(GetTypeSymbol(SpecialType.System_Int32), "exceptionKind"));
+
+        public Value ExceptionCodeValue => _exceptionCodeValue ??
+            (_exceptionCodeValue = RootTable.CreateGlobalInternalValue(GetTypeSymbol(SpecialType.System_Int32), "exceptionCode"));
+
+        public Value ExceptionMessageValue => _exceptionMessageValue ??
+            (_exceptionMessageValue = RootTable.CreateGlobalInternalValue(GetTypeSymbol(SpecialType.System_String), "exceptionMessage"));
+
+        public Value ExceptionOperationValue => _exceptionOperationValue ??
+            (_exceptionOperationValue = RootTable.CreateGlobalInternalValue(GetTypeSymbol(SpecialType.System_String), "exceptionOperation"));
+
+        public void ClearExceptionState()
+        {
+            Module.AddCopy(GetConstantValue(GetTypeSymbol(SpecialType.System_Boolean), false), ExceptionPendingValue);
+            Module.AddCopy(GetConstantValue(GetTypeSymbol(SpecialType.System_Int32), 0), ExceptionKindValue);
+            Module.AddCopy(GetConstantValue(GetTypeSymbol(SpecialType.System_Int32), 0), ExceptionCodeValue);
+            Module.AddCopy(GetConstantValue(GetTypeSymbol(SpecialType.System_String), null), ExceptionMessageValue);
+            Module.AddCopy(GetConstantValue(GetTypeSymbol(SpecialType.System_String), null), ExceptionOperationValue);
+        }
+
+        public void SetExceptionState(int kind, Value message, Value code, Value operation)
+        {
+            Module.AddCopy(GetConstantValue(GetTypeSymbol(SpecialType.System_Boolean), true), ExceptionPendingValue);
+            Module.AddCopy(GetConstantValue(GetTypeSymbol(SpecialType.System_Int32), kind), ExceptionKindValue);
+            Module.AddCopy(code, ExceptionCodeValue);
+            Module.AddCopy(message, ExceptionMessageValue);
+            Module.AddCopy(operation, ExceptionOperationValue);
+        }
+
+        private Value EmitComparison(BuiltinOperatorType operatorType, Value left, Value right, TypeSymbol operandType)
+        {
+            return EmitValue(BoundInvocationExpression.CreateBoundInvocation(this, CurrentNode,
+                new ExternSynthesizedOperatorSymbol(operatorType, operandType, this), null,
+                new BoundExpression[]
+                {
+                    BoundAccessExpression.BindAccess(left),
+                    BoundAccessExpression.BindAccess(right),
+                }));
+        }
+
+        private void EmitGuardFailure(Value failureCondition, UdonExceptionKind kind, string message, string operation)
+        {
+            JumpLabel safeLabel = Module.CreateLabel();
+            Module.AddJumpIfFalse(safeLabel, failureCondition);
+            TypeSymbol stringType = GetTypeSymbol(SpecialType.System_String);
+            SetExceptionState((int)kind,
+                GetConstantValue(stringType, message),
+                GetConstantValue(GetTypeSymbol(SpecialType.System_Int32), 0),
+                GetConstantValue(stringType, operation));
+            EmitExceptionPropagation();
+            Module.LabelJump(safeLabel);
+        }
+
+        public void EmitNullGuard(Value receiver, string operation)
+        {
+            if (!IsExceptionGuardEnabled || receiver == null || receiver.UserType.IsValueType)
+                return;
+
+            TypeSymbol objectType = GetTypeSymbol(SpecialType.System_Object);
+            Value isNull = EmitComparison(BuiltinOperatorType.Equality, receiver,
+                GetConstantValue(objectType, null), objectType);
+            EmitGuardFailure(isNull, UdonExceptionKind.NullReference,
+                "Object reference was null.", operation);
+        }
+
+        public void EmitBoundsGuard(Value collection, Value index, bool isString)
+        {
+            if (!IsExceptionGuardEnabled)
+                return;
+
+            string operation = isString ? "string-index" : "array-index";
+            EmitNullGuard(collection, operation);
+
+            TypeSymbol intType = GetTypeSymbol(SpecialType.System_Int32);
+            Value belowZero = EmitComparison(BuiltinOperatorType.LessThan, index,
+                GetConstantValue(intType, 0), intType);
+            EmitGuardFailure(belowZero, UdonExceptionKind.IndexOutOfRange,
+                "Index was outside the bounds of the collection.", operation);
+
+            TypeSymbol collectionType = isString
+                ? GetTypeSymbol(SpecialType.System_String)
+                : GetTypeSymbol(SpecialType.System_Array);
+            PropertySymbol lengthProperty = collectionType.GetMember<PropertySymbol>("Length", this);
+            Value length = EmitValue(BoundAccessExpression.BindAccess(this, CurrentNode, lengthProperty,
+                BoundAccessExpression.BindAccess(collection)));
+            Value atOrAboveLength = EmitComparison(BuiltinOperatorType.GreaterThanOrEqual, index, length, intType);
+            EmitGuardFailure(atOrAboveLength, UdonExceptionKind.IndexOutOfRange,
+                "Index was outside the bounds of the collection.", operation);
+        }
+
+        public void EmitIntegralZeroGuard(Value divisor, string operation)
+        {
+            if (!IsExceptionGuardEnabled)
+                return;
+
+            Value zero = GetConstantValue(divisor.UserType, Activator.CreateInstance(divisor.UserType.UdonType.SystemType));
+            Value isZero = EmitComparison(BuiltinOperatorType.Equality, divisor, zero, divisor.UserType);
+            EmitGuardFailure(isZero, UdonExceptionKind.DivideByZero,
+                "Attempted to divide by zero.", operation);
+        }
+
+        public void EmitUnhandledExceptionAndReturn(Value rootReturnAddress)
+        {
+            JumpLabel noException = Module.CreateLabel();
+            Module.AddJumpIfFalse(noException, ExceptionPendingValue);
+
+            TypeSymbol objectType = GetTypeSymbol(SpecialType.System_Object);
+            TypeSymbol debugType = GetTypeSymbol(typeof(Debug));
+            var logError = new ExternSynthesizedMethodSymbol(this, "LogError", debugType,
+                new[] { objectType }, null, true);
+
+            Module.AddPush(ExceptionMessageValue);
+            Module.AddExtern(logError);
+            Module.AddPush(ExceptionOperationValue);
+            Module.AddExtern(logError);
+            Module.AddPush(ExceptionKindValue);
+            Module.AddExtern(logError);
+            Module.AddPush(ExceptionCodeValue);
+            Module.AddExtern(logError);
+            ClearExceptionState();
+
+            Module.LabelJump(noException);
+            Module.AddPush(rootReturnAddress);
+            Module.AddReturn(_returnValue);
+        }
+
+        public void PushFinally(BoundStatement finallyBody) => _finallyStack.Add(finallyBody);
+
+        public void PopFinally() => _finallyStack.RemoveAt(_finallyStack.Count - 1);
+
+        private void EmitFinalizersToDepth(int targetDepth)
+        {
+            if (_finallyStack.Count <= targetDepth)
+                return;
+
+            BoundStatement finallyBody = _finallyStack[_finallyStack.Count - 1];
+            _finallyStack.RemoveAt(_finallyStack.Count - 1);
+            EnterGuardedRegion();
+            Emit(finallyBody);
+            ExitGuardedRegion();
+            EmitFinalizersToDepth(targetDepth);
+            _finallyStack.Add(finallyBody);
+        }
+
+        public void PushExceptionHandler(JumpLabel handlerLabel)
+        {
+            _exceptionHandlerStack.Push(new ExceptionHandlerTarget
+            {
+                Label = handlerLabel,
+                FinallyDepth = _finallyStack.Count,
+            });
+        }
+
+        public void PopExceptionHandler() => _exceptionHandlerStack.Pop();
+
+        public void EmitExceptionPropagation()
+        {
+            ExceptionHandlerTarget? activeHandler = null;
+            foreach (ExceptionHandlerTarget handler in _exceptionHandlerStack)
+            {
+                // A finally currently being emitted for an abrupt transfer is temporarily removed
+                // from _finallyStack. Its own catch handler must not catch an exception from that finally.
+                if (handler.FinallyDepth <= _finallyStack.Count)
+                {
+                    activeHandler = handler;
+                    break;
+                }
+            }
+
+            if (activeHandler.HasValue)
+            {
+                EmitFinalizersToDepth(activeHandler.Value.FinallyDepth);
+                Module.AddJump(activeHandler.Value.Label);
+                return;
+            }
+
+            EmitFinalizersToDepth(0);
+            Module.AddReturn(_returnValue);
+        }
+
+        public void EmitPendingExceptionCheck()
+        {
+            if (_exceptionPendingValue == null || !IsExceptionPropagationEnabled)
+                return;
+
+            JumpLabel noException = Module.CreateLabel();
+            Module.AddJumpIfFalse(noException, ExceptionPendingValue);
+            EmitExceptionPropagation();
+            Module.LabelJump(noException);
+        }
+
         public Value CreateInternalValue(TypeSymbol type)
         {
             return TopTable.CreateInternalValue(type);
@@ -594,7 +934,15 @@ namespace UdonSharp.Compiler.Emit
 
         public void EmitReturn()
         {
+            ClearPendingExceptionForControlTransfer();
+            EmitFinalizersToDepth(0);
             Module.AddReturn(_returnValue);
+        }
+
+        private void ClearPendingExceptionForControlTransfer()
+        {
+            if (_exceptionPendingValue != null)
+                ClearExceptionState();
         }
 
         public void EmitReturn(BoundExpression returnExpression)
@@ -626,7 +974,9 @@ namespace UdonSharp.Compiler.Emit
                 Emit(returnExpression);
             }
 
-            EmitReturn();
+            ClearPendingExceptionForControlTransfer();
+            EmitFinalizersToDepth(0);
+            Module.AddReturn(_returnValue);
         }
 
         Dictionary<(TypeSymbol, TypeSymbol), MethodSymbol> _numericConversionMethod = new Dictionary<(TypeSymbol, TypeSymbol), MethodSymbol>();
@@ -888,12 +1238,12 @@ namespace UdonSharp.Compiler.Emit
             }
         }
 
-        public JumpLabel TopContinueLabel => _continueLabelStack.Peek();
+        public JumpLabel TopContinueLabel => _continueLabelStack.Peek().Label;
         
         public JumpLabel PushContinueLabel()
         {
             JumpLabel continueLabel = Module.CreateLabel();
-            _continueLabelStack.Push(continueLabel);
+            _continueLabelStack.Push(new ControlTransferTarget { Label = continueLabel, FinallyDepth = _finallyStack.Count });
             return continueLabel;
         }
 
@@ -902,18 +1252,34 @@ namespace UdonSharp.Compiler.Emit
             _continueLabelStack.Pop();
         }
 
-        public JumpLabel TopBreakLabel => _breakLabelStack.Peek();
+        public JumpLabel TopBreakLabel => _breakLabelStack.Peek().Label;
 
         public JumpLabel PushBreakLabel()
         {
             JumpLabel breakLabel = Module.CreateLabel();
-            _breakLabelStack.Push(breakLabel);
+            _breakLabelStack.Push(new ControlTransferTarget { Label = breakLabel, FinallyDepth = _finallyStack.Count });
             return breakLabel;
         }
 
         public void PopBreakLabel()
         {
             _breakLabelStack.Pop();
+        }
+
+        public void EmitBreak()
+        {
+            ControlTransferTarget target = _breakLabelStack.Peek();
+            ClearPendingExceptionForControlTransfer();
+            EmitFinalizersToDepth(target.FinallyDepth);
+            Module.AddJump(target.Label);
+        }
+
+        public void EmitContinue()
+        {
+            ControlTransferTarget target = _continueLabelStack.Peek();
+            ClearPendingExceptionForControlTransfer();
+            EmitFinalizersToDepth(target.FinallyDepth);
+            Module.AddJump(target.Label);
         }
 
         public void FlattenTableCounters()

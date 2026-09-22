@@ -111,6 +111,8 @@ namespace UdonSharp.Compiler.Binder
                 PopRecursiveValues(recursiveValues, context);
             }
 
+            context.EmitPendingExceptionCheck();
+
             // Handle out/ref parameters
             for (int i = 0; i < Method.Parameters.Length; ++i)
             {

@@ -37,6 +37,7 @@ namespace UdonSharp.Compiler.Binder
 
             Value.CowValue instanceCowValue = GetInstanceValue(context);
             Value instanceValue = instanceCowValue.Value;
+            context.EmitNullGuard(instanceValue, $"cross-behaviour-call:{Method.Name}");
             BoundAccessExpression instanceAccess = BoundAccessExpression.BindAccess(instanceValue);
 
             TypeSymbol stringType = context.GetTypeSymbol(SpecialType.System_String);

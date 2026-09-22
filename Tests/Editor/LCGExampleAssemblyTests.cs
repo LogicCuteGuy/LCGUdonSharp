@@ -44,6 +44,7 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer.Tests
             "Packages/com.logiccuteguy.lcgudonsharp/Example/ExtendedLanguage/LinqClosureExample.cs",
             "Packages/com.logiccuteguy.lcgudonsharp/Example/ExtendedLanguage/DynamicExample.cs",
             "Packages/com.logiccuteguy.lcgudonsharp/Example/ExtendedLanguage/SpanExample.cs",
+            "Packages/com.logiccuteguy.lcgudonsharp/Example/ExtendedLanguage/ExceptionHandlingExample.cs",
         };
 
         private static readonly string[] ExampleScriptPaths =
@@ -204,6 +205,69 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer.Tests
                 Assert.That(assembly, Is.Not.Empty, programAssetPath + " emitted no UASM.");
                 Assert.That(assembly, Does.Contain("_interact"));
             }
+        }
+
+        [Test]
+        public void ExceptionHandlingExample_ExecutesCompilerManagedFailuresInUdonVm()
+        {
+            UdonSharpCompilerV1.CompileSync(new UdonSharpCompileOptions { IsEditorBuild = true });
+            LogAssert.NoUnexpectedReceived();
+            Assert.That(UdonSharp.UdonSharpProgramAsset.AnyUdonSharpScriptHasError(), Is.False);
+
+            System.Type behaviourType = System.Type.GetType(
+                "LogicCuteGuy.LCGUdonSharp.Examples.ExtendedLanguage.ExceptionHandlingExample, LogicCuteGuy.LCGUdonSharp.Examples",
+                true);
+            var asset = UdonSharp.UdonSharpProgramAsset.GetProgramAssetForClass(behaviourType);
+            var program = asset.SerializedProgramAsset.RetrieveProgram();
+            var vm = VRC.Udon.Editor.UdonEditorManager.Instance.ConstructUdonVM();
+            vm.LoadProgram(program);
+            vm.SetProgramCounter(program.EntryPoints.GetAddressFromSymbol("_interact"));
+            Assert.That(vm.Interpret(), Is.Zero);
+
+            var heap = program.Heap;
+            var symbols = program.SymbolTable;
+            const int ExpectedAggregateResult = 1111111135;
+            Assert.That(heap.GetHeapVariable<int>(symbols.GetAddressFromSymbol("result")), Is.EqualTo(ExpectedAggregateResult));
+            Assert.That(heap.GetHeapVariable<int>(symbols.GetAddressFromSymbol("finallyCount")), Is.EqualTo(211));
+            Assert.That(heap.GetHeapVariable<int>(symbols.GetAddressFromSymbol("sideEffectCount")), Is.EqualTo(1));
+            Assert.That(heap.GetHeapVariable<string>(symbols.GetAddressFromSymbol("message")), Is.EqualTo("explicit payload"));
+            Assert.That(heap.GetHeapVariable<int>(symbols.GetAddressFromSymbol("code")), Is.EqualTo(17));
+            Assert.That(heap.GetHeapVariable<string>(symbols.GetAddressFromSymbol("operation")), Is.EqualTo("demo"));
+            foreach (string caughtFlag in new[]
+                     {
+                         "argumentCaught", "arrayCaught", "stringCaught", "divideCaught", "moduloCaught",
+                         "nullCaught", "negativeWriteCaught", "rethrowCaught", "finallyOverrideCaught",
+                     })
+            {
+                Assert.That(heap.GetHeapVariable<bool>(symbols.GetAddressFromSymbol(caughtFlag)), Is.True, caughtFlag);
+            }
+        }
+
+        [Test]
+        public void ExceptionHandlingExample_UncaughtFailureLogsClearsAndAllowsLaterEvent()
+        {
+            UdonSharpCompilerV1.CompileSync(new UdonSharpCompileOptions { IsEditorBuild = true });
+            LogAssert.NoUnexpectedReceived();
+
+            System.Type behaviourType = System.Type.GetType(
+                "LogicCuteGuy.LCGUdonSharp.Examples.ExtendedLanguage.ExceptionHandlingExample, LogicCuteGuy.LCGUdonSharp.Examples",
+                true);
+            var asset = UdonSharp.UdonSharpProgramAsset.GetProgramAssetForClass(behaviourType);
+            var program = asset.SerializedProgramAsset.RetrieveProgram();
+            var vm = VRC.Udon.Editor.UdonEditorManager.Instance.ConstructUdonVM();
+            vm.LoadProgram(program);
+
+            LogAssert.Expect(LogType.Error, "uncaught compiler-managed failure");
+            LogAssert.Expect(LogType.Error, "uncaught-demo");
+            LogAssert.Expect(LogType.Error, "5");
+            LogAssert.Expect(LogType.Error, "91");
+            vm.SetProgramCounter(program.EntryPoints.GetAddressFromSymbol("ThrowUncaught"));
+            Assert.That(vm.Interpret(), Is.Zero);
+
+            vm.SetProgramCounter(program.EntryPoints.GetAddressFromSymbol("_interact"));
+            Assert.That(vm.Interpret(), Is.Zero);
+            Assert.That(program.Heap.GetHeapVariable<int>(
+                program.SymbolTable.GetAddressFromSymbol("result")), Is.EqualTo(1111111135));
         }
 
         [Test]

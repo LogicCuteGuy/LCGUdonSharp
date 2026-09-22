@@ -28,6 +28,7 @@ namespace UdonSharp.Compiler.Binder
                 if (!Method.IsStatic && !Method.IsConstructor)
                 {
                     instanceValue = GetInstanceValue(context);
+                    context.EmitNullGuard(instanceValue.Value, $"call:{Method.Name}");
 
                     // Prevent mutating a value constant if you call a method on the constant for some reason
                     // todo: fix for use with the cowvalues

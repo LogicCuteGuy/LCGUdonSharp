@@ -77,14 +77,29 @@ namespace UdonSharp.Compiler.Symbols
                 }
             }
             
-            if (context.MethodNeedsExport(this))
+            bool needsExport = context.MethodNeedsExport(this);
+            if (needsExport)
             {
                 ExportedMethodAddress.ResolveAddress(methodLinkage.MethodExportName);
                 context.Module.AddExportTag(this);
             }
 
             Value returnAddressConst = context.GetConstantValue(context.GetTypeSymbol(SpecialType.System_UInt32), 0xFFFFFFFF);
-            context.Module.AddPush(returnAddressConst);
+            if (needsExport && context.HasExceptionSupport)
+            {
+                context.ClearExceptionState();
+                JumpLabel rootExit = context.Module.CreateLabel();
+                Value rootExitAddress = context.CreateGlobalInternalValue(context.GetTypeSymbol(SpecialType.System_UInt32));
+                context.Module.AddPush(rootExitAddress);
+                context.Module.AddJump(methodLinkage.MethodLabel);
+                context.Module.LabelJump(rootExit);
+                rootExitAddress.DefaultValue = rootExit.Address;
+                context.EmitUnhandledExceptionAndReturn(returnAddressConst);
+            }
+            else
+            {
+                context.Module.AddPush(returnAddressConst);
+            }
 
             base.Emit(context);
         }

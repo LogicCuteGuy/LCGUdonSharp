@@ -645,4 +645,40 @@ namespace UdonSharp
         public VRC.Economy.UdonProduct Product { get; internal set; }
         public string[] Owners { get; internal set; }
     }
+
+    /// <summary>
+    /// Identifies a failure represented by compiler-managed synchronous exception control flow.
+    /// </summary>
+    public enum UdonExceptionKind
+    {
+        Unknown,
+        Explicit,
+        NullReference,
+        IndexOutOfRange,
+        DivideByZero,
+        InvalidOperation,
+        Argument,
+        ArgumentNull,
+        ArgumentOutOfRange,
+        NotSupported,
+    }
+
+    /// <summary>
+    /// Compiler-recognized exception payload. Compiled Udon stores this as scalar hidden state rather
+    /// than constructing a managed exception object at runtime.
+    /// </summary>
+    public sealed class UdonException : Exception
+    {
+        public UdonExceptionKind Kind { get; }
+        public int Code { get; }
+        public string Operation { get; }
+
+        public UdonException(UdonExceptionKind kind, string message, int code = 0, string operation = null)
+            : base(message)
+        {
+            Kind = kind;
+            Code = code;
+            Operation = operation;
+        }
+    }
 }

@@ -1,6 +1,7 @@
 ﻿
 using System;
 using Microsoft.CodeAnalysis;
+using UdonSharp.Compiler.Emit;
 using UdonSharp.Compiler.Symbols;
 using UdonSharp.Compiler.Udon;
 
@@ -37,6 +38,13 @@ namespace UdonSharp.Compiler.Binder
                 new[] {intType}, elementType, false);
 
             return new SynthesizedPropertySymbol(context, getMethod, setMethod);
+        }
+
+        protected override void EmitAccessGuards(EmitContext context, BoundExpression instanceExpression,
+            BoundExpression[] parameterExpressions)
+        {
+            context.EmitBoundsGuard(context.EmitValue(instanceExpression),
+                context.EmitValue(parameterExpressions[0]), false);
         }
     }
 }

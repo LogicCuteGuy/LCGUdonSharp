@@ -80,6 +80,23 @@ namespace UdonSharp.Compiler.Symbols
         public new IMethodSymbol RoslynSymbol => (IMethodSymbol)base.RoslynSymbol;
         
         public BoundNode MethodBody { get; private set; }
+        private readonly HashSet<MethodSymbol> _protectedDependencies = new HashSet<MethodSymbol>();
+        public IEnumerable<MethodSymbol> ProtectedDependencies => _protectedDependencies;
+        public bool HasProtectedRegion { get; private set; }
+        public bool HasExplicitThrow { get; private set; }
+
+        public void MarkProtectedRegion() => HasProtectedRegion = true;
+        public void MarkExplicitThrow()
+        {
+            HasProtectedRegion = true;
+            HasExplicitThrow = true;
+        }
+
+        public void AddProtectedDependency(MethodSymbol method)
+        {
+            if (method != null && !method.IsExtern)
+                _protectedDependencies.Add(method);
+        }
 
         public override bool IsBound => MethodBody != null || RoslynSymbol.IsAbstract || IsUntypedGenericMethod;
 

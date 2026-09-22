@@ -20,6 +20,16 @@ namespace UdonSharp.Compiler.Binder
         private Symbol OwningSymbol { get; }
         private BindContext Context { get; }
         private SemanticModel SymbolLookupModel { get; }
+        private sealed class CatchVariableInfo
+        {
+            public BoundCatchClause Clause;
+            public bool IsUdonException;
+        }
+
+        private readonly Dictionary<ISymbol, CatchVariableInfo> _catchVariables =
+            new Dictionary<ISymbol, CatchVariableInfo>(SymbolEqualityComparer.Default);
+        private readonly Stack<BoundCatchClause> _activeCatchClauses = new Stack<BoundCatchClause>();
+        private int _protectedBindDepth;
 
         public BinderSyntaxVisitor(Symbol owningSymbol, BindContext context)
         {
@@ -76,7 +86,52 @@ namespace UdonSharp.Compiler.Binder
                 node.Kind() != SyntaxKind.SimpleMemberAccessExpression &&
                 node.Kind() != SyntaxKind.ThisExpression) return null;
 
+            if (node is MemberAccessExpressionSyntax catchAccess &&
+                SymbolLookupModel.GetSymbolInfo(catchAccess.Expression).Symbol is ISymbol catchVariable &&
+                _catchVariables.TryGetValue(catchVariable, out CatchVariableInfo catchInfo))
+            {
+                ExceptionPayloadMember payloadMember;
+                TypeSymbol payloadType;
+                switch (catchAccess.Name.Identifier.ValueText)
+                {
+                    case "Message":
+                        payloadMember = ExceptionPayloadMember.Message;
+                        payloadType = Context.GetTypeSymbol(SpecialType.System_String);
+                        break;
+                    case "Kind" when catchInfo.IsUdonException:
+                        payloadMember = ExceptionPayloadMember.Kind;
+                        payloadType = Context.GetTypeSymbol(typeof(UdonExceptionKind));
+                        break;
+                    case "Code" when catchInfo.IsUdonException:
+                        payloadMember = ExceptionPayloadMember.Code;
+                        payloadType = Context.GetTypeSymbol(SpecialType.System_Int32);
+                        break;
+                    case "Operation" when catchInfo.IsUdonException:
+                        payloadMember = ExceptionPayloadMember.Operation;
+                        payloadType = Context.GetTypeSymbol(SpecialType.System_String);
+                        break;
+                    default:
+                        throw new CompilerException($"Catch variable member '{catchAccess.Name.Identifier.ValueText}' is not supported. Standard exceptions expose Message; UdonException also exposes Kind, Code, and Operation.", catchAccess.GetLocation());
+                }
+
+                return new BoundExceptionPayloadAccessExpression(catchAccess, catchInfo.Clause, payloadMember, payloadType);
+            }
+
+            if (node is IdentifierNameSyntax catchIdentifier &&
+                SymbolLookupModel.GetSymbolInfo(catchIdentifier).Symbol is ISymbol identifierSymbol &&
+                _catchVariables.ContainsKey(identifierSymbol))
+            {
+                throw new CompilerException("Catch variables are compiler pseudo-values and may only be used to read their supported payload properties.", catchIdentifier.GetLocation());
+            }
+
             Symbol nodeSymbol = GetSymbol(node);
+
+            if (_protectedBindDepth > 0 && nodeSymbol is PropertySymbol protectedProperty &&
+                OwningSymbol is MethodSymbol protectedOwningMethod)
+            {
+                protectedOwningMethod.AddProtectedDependency(protectedProperty.GetMethod);
+                protectedOwningMethod.AddProtectedDependency(protectedProperty.SetMethod);
+            }
 
             if (nodeSymbol.RoslynSymbol.Kind == SymbolKind.NamedType)
                 return null;
@@ -110,7 +165,14 @@ namespace UdonSharp.Compiler.Binder
             if (accessExpression != null)
                 return accessExpression;
             
-            return (BoundExpression)Visit(node);
+            BoundExpression expression = (BoundExpression)Visit(node);
+            if (_protectedBindDepth > 0 && expression is BoundInvocationExpression invocation &&
+                OwningSymbol is MethodSymbol owningMethod)
+            {
+                owningMethod.AddProtectedDependency(invocation.Method);
+            }
+
+            return expression;
         }
 
         private static bool TryImplicitConstantConversion(ref BoundExpression boundExpression, TypeSymbol targetType)
@@ -221,27 +283,183 @@ namespace UdonSharp.Compiler.Binder
         
         public override BoundNode VisitTryStatement(TryStatementSyntax node)
         {
-            throw new System.NotSupportedException("Try/Catch/Finally is not supported by UdonSharp since Udon does not have a way to handle exceptions");
+            if (node.DescendantNodes().OfType<AwaitExpressionSyntax>().Any())
+                throw new CompilerException("await inside try/catch/finally is not supported by synchronous compiler-managed exception handling.", node.GetLocation());
+
+            if (OwningSymbol is MethodSymbol owningMethod)
+                owningMethod.MarkProtectedRegion();
+
+            _protectedBindDepth++;
+            BoundStatement tryBody = VisitStatement(node.Block);
+            var catches = new List<BoundCatchClause>();
+
+            foreach (CatchClauseSyntax catchSyntax in node.Catches)
+            {
+                if (catchSyntax.Filter != null)
+                    throw new CompilerException("Catch filters are not supported by compiler-managed exception handling.", catchSyntax.Filter.GetLocation());
+
+                int[] matchingKinds = GetCatchKinds(catchSyntax);
+                var catchClause = new BoundCatchClause(catchSyntax, matchingKinds);
+                ISymbol catchVariable = catchSyntax.Declaration == null
+                    ? null
+                    : SymbolLookupModel.GetDeclaredSymbol(catchSyntax.Declaration);
+
+                if (catchVariable != null)
+                {
+                    ITypeSymbol catchType = SymbolLookupModel.GetTypeInfo(catchSyntax.Declaration.Type).Type;
+                    _catchVariables.Add(catchVariable, new CatchVariableInfo
+                    {
+                        Clause = catchClause,
+                        IsUdonException = catchType?.ToDisplayString() == "UdonSharp.UdonException",
+                    });
+                }
+
+                _activeCatchClauses.Push(catchClause);
+                catchClause.Body = VisitStatement(catchSyntax.Block);
+                _activeCatchClauses.Pop();
+
+                if (catchVariable != null)
+                    _catchVariables.Remove(catchVariable);
+
+                catches.Add(catchClause);
+            }
+
+            BoundStatement finallyBody = node.Finally == null ? null : VisitStatement(node.Finally.Block);
+            _protectedBindDepth--;
+            return new BoundTryStatement(node, tryBody, catches, finallyBody);
         }
 
         public override BoundNode VisitCatchClause(CatchClauseSyntax node)
         {
-            throw new System.NotSupportedException("Try/Catch/Finally is not supported by UdonSharp since Udon does not have a way to handle exceptions");
+            throw new InvalidOperationException("Catch clauses are bound by VisitTryStatement.");
         }
 
         public override BoundNode VisitFinallyClause(FinallyClauseSyntax node)
         {
-            throw new System.NotSupportedException("Try/Catch/Finally is not supported by UdonSharp since Udon does not have a way to handle exceptions");
+            return Visit(node.Block);
         }
 
         public override BoundNode VisitThrowStatement(ThrowStatementSyntax node)
         {
-            throw new System.NotSupportedException("UdonSharp does not support throwing exceptions since Udon does not have support for exception throwing at the moment");
+            if (OwningSymbol is MethodSymbol owningMethod)
+                owningMethod.MarkExplicitThrow();
+
+            if (node.Expression == null)
+            {
+                if (_activeCatchClauses.Count == 0)
+                    throw new CompilerException("throw; is only valid inside a catch clause.", node.GetLocation());
+
+                return new BoundThrowStatement(node, _activeCatchClauses.Peek());
+            }
+
+            if (!(node.Expression is ObjectCreationExpressionSyntax creation))
+                throw new CompilerException("Only 'throw new' with an approved exception constructor is supported.", node.Expression.GetLocation());
+
+            return BindThrowCreation(node, creation);
         }
 
         public override BoundNode VisitThrowExpression(ThrowExpressionSyntax node)
         {
-            throw new System.NotSupportedException("UdonSharp does not support throwing exceptions since Udon does not have support for exception throwing at the moment");
+            throw new CompilerException("Throw expressions are not supported; use a throw statement.", node.GetLocation());
+        }
+
+        private int[] GetCatchKinds(CatchClauseSyntax node)
+        {
+            if (node.Declaration == null)
+                return null;
+
+            string typeName = SymbolLookupModel.GetTypeInfo(node.Declaration.Type).Type?.ToDisplayString();
+            switch (typeName)
+            {
+                case "UdonSharp.UdonException":
+                case "System.Exception":
+                    return null;
+                case "System.NullReferenceException":
+                    return new[] { (int)UdonExceptionKind.NullReference };
+                case "System.IndexOutOfRangeException":
+                    return new[] { (int)UdonExceptionKind.IndexOutOfRange };
+                case "System.DivideByZeroException":
+                    return new[] { (int)UdonExceptionKind.DivideByZero };
+                case "System.InvalidOperationException":
+                    return new[] { (int)UdonExceptionKind.InvalidOperation };
+                case "System.ArgumentException":
+                    return new[] { (int)UdonExceptionKind.Argument, (int)UdonExceptionKind.ArgumentNull, (int)UdonExceptionKind.ArgumentOutOfRange };
+                case "System.ArgumentNullException":
+                    return new[] { (int)UdonExceptionKind.ArgumentNull };
+                case "System.ArgumentOutOfRangeException":
+                    return new[] { (int)UdonExceptionKind.ArgumentOutOfRange };
+                case "System.NotSupportedException":
+                    return new[] { (int)UdonExceptionKind.NotSupported };
+                default:
+                    throw new CompilerException($"Exception type '{typeName}' is not supported by compiler-managed catches.", node.Declaration.Type.GetLocation());
+            }
+        }
+
+        private BoundNode BindThrowCreation(ThrowStatementSyntax throwSyntax, ObjectCreationExpressionSyntax creation)
+        {
+            string typeName = SymbolLookupModel.GetTypeInfo(creation).Type?.ToDisplayString();
+            IObjectCreationOperation creationOperation = SymbolLookupModel.GetOperation(creation) as IObjectCreationOperation;
+            IArgumentOperation[] suppliedArguments = creationOperation?.Arguments
+                .Where(argument => !argument.IsImplicit)
+                .ToArray() ?? Array.Empty<IArgumentOperation>();
+            TypeSymbol stringType = Context.GetTypeSymbol(SpecialType.System_String);
+            TypeSymbol intType = Context.GetTypeSymbol(SpecialType.System_Int32);
+            BoundExpression message;
+            BoundExpression code = new BoundConstantExpression(0, intType, creation);
+            BoundExpression operation = new BoundConstantExpression(null, stringType, creation);
+            int kind;
+
+            if (typeName == "UdonSharp.UdonException")
+            {
+                IArgumentOperation kindArgument = suppliedArguments.FirstOrDefault(argument => argument.Parameter?.Name == "kind");
+                IArgumentOperation messageArgument = suppliedArguments.FirstOrDefault(argument => argument.Parameter?.Name == "message");
+                if (kindArgument == null || messageArgument == null || suppliedArguments.Length > 4)
+                    throw new CompilerException("UdonException must use (kind, message, code = 0, operation = null).", creation.GetLocation());
+
+                ExpressionSyntax kindExpression = (ExpressionSyntax)kindArgument.Value.Syntax;
+                Optional<object> kindConstant = SymbolLookupModel.GetConstantValue(kindExpression);
+                if (!kindConstant.HasValue)
+                    throw new CompilerException("UdonException kind must be a compile-time constant.", kindExpression.GetLocation());
+
+                kind = Convert.ToInt32(kindConstant.Value);
+                message = VisitExpression((ExpressionSyntax)messageArgument.Value.Syntax, stringType);
+                IArgumentOperation codeArgument = suppliedArguments.FirstOrDefault(argument => argument.Parameter?.Name == "code");
+                IArgumentOperation operationArgument = suppliedArguments.FirstOrDefault(argument => argument.Parameter?.Name == "operation");
+                if (codeArgument != null)
+                    code = VisitExpression((ExpressionSyntax)codeArgument.Value.Syntax, intType);
+                if (operationArgument != null)
+                    operation = VisitExpression((ExpressionSyntax)operationArgument.Value.Syntax, stringType);
+            }
+            else
+            {
+                kind = GetThrownKind(typeName, creation);
+                if (suppliedArguments.Length > 1)
+                    throw new CompilerException("Approved standard exceptions support only parameterless and string constructors.", creation.GetLocation());
+
+                message = suppliedArguments.Length == 1
+                    ? VisitExpression((ExpressionSyntax)suppliedArguments[0].Value.Syntax, stringType)
+                    : new BoundConstantExpression(typeName, stringType, creation);
+            }
+
+            return new BoundThrowStatement(throwSyntax, kind, message, code, operation);
+        }
+
+        private static int GetThrownKind(string typeName, SyntaxNode node)
+        {
+            switch (typeName)
+            {
+                case "System.Exception": return (int)UdonExceptionKind.Explicit;
+                case "System.NullReferenceException": return (int)UdonExceptionKind.NullReference;
+                case "System.IndexOutOfRangeException": return (int)UdonExceptionKind.IndexOutOfRange;
+                case "System.DivideByZeroException": return (int)UdonExceptionKind.DivideByZero;
+                case "System.InvalidOperationException": return (int)UdonExceptionKind.InvalidOperation;
+                case "System.ArgumentException": return (int)UdonExceptionKind.Argument;
+                case "System.ArgumentNullException": return (int)UdonExceptionKind.ArgumentNull;
+                case "System.ArgumentOutOfRangeException": return (int)UdonExceptionKind.ArgumentOutOfRange;
+                case "System.NotSupportedException": return (int)UdonExceptionKind.NotSupported;
+                default:
+                    throw new CompilerException($"Exception type '{typeName}' is not supported by compiler-managed throw.", node.GetLocation());
+            }
         }
 
         public override BoundNode VisitArrowExpressionClause(ArrowExpressionClauseSyntax node)

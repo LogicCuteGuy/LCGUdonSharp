@@ -27,10 +27,19 @@ namespace UdonSharp.Compiler.Binder
         {
             Value returnValue = context.GetReturnValue(ValueType);
 
+            Value.CowValue sourceValue;
+            Value.CowValue indexValue;
+            using (context.InterruptAssignmentScope())
+            {
+                sourceValue = context.EmitValue(SourceExpression).GetCowValue(context);
+                indexValue = context.EmitValue(IndexerExpression).GetCowValue(context);
+            }
+            context.EmitBoundsGuard(sourceValue.Value, indexValue.Value, true);
+
             var charArray = BoundInvocationExpression.CreateBoundInvocation(context, SyntaxNode, _toCharArraySymbol,
-                BindAccess(context.EmitValue(SourceExpression)), new[]
+                BindAccess(sourceValue), new[]
                 {
-                    IndexerExpression,
+                    BindAccess(indexValue),
                     BindAccess(context.GetConstantValue(context.GetTypeSymbol(SpecialType.System_Int32), 1))
                 });
 
@@ -40,6 +49,9 @@ namespace UdonSharp.Compiler.Binder
                     {
                         BindAccess(context.GetConstantValue(context.GetTypeSymbol(SpecialType.System_Int32), 0))
                     }));
+
+            sourceValue.Dispose();
+            indexValue.Dispose();
 
             return returnValue;
         }

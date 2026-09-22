@@ -1765,6 +1765,11 @@ namespace UdonSharp.Compiler.Lowering
                     return Fail(method.ParameterList, "Async Udon methods with parameters are not supported yet.");
                 if (method.Body.DescendantNodes().OfType<ReturnStatementSyntax>().Any())
                     return Fail(method.Body, "Explicit return statements in async Udon methods are not supported yet.");
+                TryStatementSyntax awaitTry = method.Body.DescendantNodes().OfType<TryStatementSyntax>()
+                    .FirstOrDefault(tryStatement => tryStatement.DescendantNodes().OfType<AwaitExpressionSyntax>().Any());
+                if (awaitTry != null)
+                    return Fail(awaitTry,
+                        "await inside try/catch/finally is not supported by synchronous compiler-managed exception handling.");
                 if (method.Body.DescendantNodes().Any(node =>
                         node is VariableDeclarationSyntax ||
                         node is DeclarationExpressionSyntax ||
