@@ -321,9 +321,11 @@ Every UdonSharp `.cs` needs a paired `.asset` UdonSharpProgramAsset (same basena
 - Generic interfaces/methods, interface inheritance, default/static interface members, events, indexers, explicit interface implementations
 - Nested awaits, explicit returns in async, direct `Task<T>` result assignment, multiple simultaneous SDK awaits
 - Continuous Rigidbody behaviours and networked Udon Graph behaviours **inside zones**
-- Overlapping zones; `[UdonSynced]` fields under a zone (fail closed until per-zone variants ship)
+- Overlapping parent/child zones; `[UdonSynced]` fields under a zone (fail closed until per-zone variants ship)
 
 </details>
+
+Zone colliders in separate hierarchies may overlap. Parent/child zone colliders cannot overlap; scene objects otherwise belong only to their nearest ancestor `LCGNetworkZone`.
 
 ---
 
@@ -350,7 +352,7 @@ LCG network logging is off by default. Enable **Edit > Project Settings > Udon S
 | Installer stops immediately | SDK version must be exactly `3.10.5`. Setup refuses other versions by design. |
 | Duplicate `UdonSharp.*` assemblies | Run **Tools > LCGUdonSharp > Install or Repair** — the SDK's bundled copy may have been restored. |
 | Packet fields not syncing after upgrade | Protocol is versioned (v2): recompile all UdonSharp programs and rebuild the world. |
-| Build fails around `LCGNetworkZone` | Zones fail closed on Continuous bodies, Udon Graph behaviours, overlapping zones, `[UdonSynced]` under a zone, and PlayerObject templates sharing a hierarchy. |
+| Build fails around `LCGNetworkZone` | Zones fail closed on Continuous bodies, Udon Graph behaviours, overlapping parent/child zones, `[UdonSynced]` under a zone, and PlayerObject templates sharing a hierarchy. Zones in separate hierarchies may overlap. |
 | Need to uninstall | Run **Restore VRChat UdonSharp and Disable Auto Setup** first, then remove the package. |
 
 ---

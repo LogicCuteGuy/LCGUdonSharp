@@ -415,9 +415,9 @@ namespace UdonSharpEditor
                     Transform second = zones[j].transform;
                     bool hierarchical = first.IsChildOf(second) || second.IsChildOf(first);
                     Collider secondCollider = zones[j].GetComponent<Collider>();
-                    if (!hierarchical && secondCollider != null && collider.bounds.Intersects(secondCollider.bounds))
+                    if (hierarchical && secondCollider != null && collider.bounds.Intersects(secondCollider.bounds))
                         throw new BuildFailedException(
-                            $"LCG network zones '{GetPath(first)}' and '{GetPath(second)}' overlap but are not parent/child zones.");
+                            $"LCG network zones '{GetPath(first)}' and '{GetPath(second)}' overlap inside the same parent/child hierarchy.");
                 }
             }
         }

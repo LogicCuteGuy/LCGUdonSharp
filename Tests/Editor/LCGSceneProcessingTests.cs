@@ -222,6 +222,116 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer.Tests
             finally { CloseAfterBehaviourSetup(scene); }
         }
 
+        [Test]
+        public void SpatiallyOverlappingSiblingZones_KeepTheirHierarchyObjectsSeparate()
+        {
+            Scene scene = EditorSceneManager.NewPreviewScene();
+            try
+            {
+                LCGNetworkZone firstZone = CreateZone(scene, "First zone");
+                LCGNetworkZone secondZone = CreateZone(scene, "Second zone");
+                GameObject firstObject = CreateProtectedChild(firstZone.transform, "First object");
+                GameObject secondObject = CreateProtectedChild(secondZone.transform, "Second object");
+
+                CreateProcessor().OnProcessScene(scene, null);
+
+                Assert.That(GetProtectedObjects(firstZone),
+                    Is.EquivalentTo(new[] { firstZone.gameObject, firstObject }));
+                Assert.That(GetProtectedObjects(secondZone),
+                    Is.EquivalentTo(new[] { secondZone.gameObject, secondObject }));
+            }
+            finally { CloseAfterBehaviourSetup(scene); }
+        }
+
+        [Test]
+        public void NestedOverlappingZones_FailBeforeAddingHelpers()
+        {
+            Scene scene = EditorSceneManager.NewPreviewScene();
+            try
+            {
+                LCGNetworkZone outerZone = CreateZone(scene, "Outer zone");
+                GameObject outerObject = CreateProtectedChild(outerZone.transform, "Outer object");
+                LCGNetworkZone innerZone = CreateZone(scene, "Inner zone", outerZone.transform);
+                GameObject innerObject = CreateProtectedChild(innerZone.transform, "Inner object");
+
+                var error = Assert.Throws<BuildFailedException>(() => CreateProcessor().OnProcessScene(scene, null));
+                Assert.That(error.Message, Does.Contain("parent/child hierarchy"));
+                Assert.That(outerObject.GetComponents<LCGZoneOwnershipGuard>(), Is.Empty);
+                Assert.That(innerObject.GetComponents<LCGZoneOwnershipGuard>(), Is.Empty);
+                Assert.That(scene.GetRootGameObjects(), Has.Length.EqualTo(1));
+            }
+            finally { CloseAfterBehaviourSetup(scene); }
+        }
+
+        [Test]
+        public void NestedNonOverlappingZones_AssignObjectsOnlyToTheirNearestZone()
+        {
+            Scene scene = EditorSceneManager.NewPreviewScene();
+            try
+            {
+                LCGNetworkZone outerZone = CreateZone(scene, "Outer zone");
+                GameObject outerObject = CreateProtectedChild(outerZone.transform, "Outer object");
+                LCGNetworkZone innerZone = CreateZone(scene, "Inner zone", outerZone.transform);
+                innerZone.transform.localPosition = Vector3.right * 10f;
+                GameObject innerObject = CreateProtectedChild(innerZone.transform, "Inner object");
+
+                CreateProcessor().OnProcessScene(scene, null);
+
+                Assert.That(GetProtectedObjects(outerZone),
+                    Is.EquivalentTo(new[] { outerZone.gameObject, outerObject }));
+                Assert.That(GetProtectedObjects(innerZone),
+                    Is.EquivalentTo(new[] { innerZone.gameObject, innerObject }));
+            }
+            finally { CloseAfterBehaviourSetup(scene); }
+        }
+
+        [Test]
+        public void UdonSyncedBehaviourBelowZone_FailsBeforeAddingHelpers()
+        {
+            Scene scene = EditorSceneManager.NewPreviewScene();
+            try
+            {
+                LCGNetworkZone zone = CreateZone(scene, "Zone with native sync");
+                var target = new GameObject("Native synced object");
+                target.transform.SetParent(zone.transform);
+                Type syncedType = Type.GetType(
+                    "LogicCuteGuy.LCGUdonSharp.Examples.AsyncAwait.AsyncSerializationExample, LogicCuteGuy.LCGUdonSharp.Examples",
+                    true);
+                target.AddUdonSharpComponent(syncedType);
+
+                var error = Assert.Throws<BuildFailedException>(() => CreateProcessor().OnProcessScene(scene, null));
+                Assert.That(error.Message, Does.Contain("UdonSynced fields"));
+                Assert.That(target.GetComponents<LCGZoneOwnershipGuard>(), Is.Empty);
+                Assert.That(scene.GetRootGameObjects(), Has.Length.EqualTo(1));
+            }
+            finally { CloseAfterBehaviourSetup(scene); }
+        }
+
+        private static LCGNetworkZone CreateZone(Scene scene, string name, Transform parent = null)
+        {
+            var target = new GameObject(name);
+            if (parent == null)
+                SceneManager.MoveGameObjectToScene(target, scene);
+            else
+                target.transform.SetParent(parent);
+            target.AddComponent<BoxCollider>().isTrigger = true;
+            return target.AddUdonSharpComponent<LCGNetworkZone>();
+        }
+
+        private static GameObject CreateProtectedChild(Transform parent, string name)
+        {
+            var target = new GameObject(name);
+            target.transform.SetParent(parent);
+            target.AddUdonSharpComponent<LCGManualObjectSync>();
+            return target;
+        }
+
+        private static GameObject[] GetProtectedObjects(LCGNetworkZone zone)
+        {
+            var backing = UdonSharpEditorUtility.GetBackingUdonBehaviour(zone);
+            return (GameObject[])GetSerializedVariable(backing, "protectedObjects");
+        }
+
         private static void CloseAfterBehaviourSetup(Scene scene)
         {
             // UdonSharp schedules inspector setup in delayCall; let it finish before
