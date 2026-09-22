@@ -3,8 +3,9 @@
 This folder contains real U# examples for the build-time async lowering:
 
 - `AsyncYieldDelayExample` uses `Task.Yield()` and `Task.Delay(int)`;
-- `AsyncStringDownloadExample` awaits `VRCAsync.LoadStringAsync` while keeping
-  the traditional `OnStringLoadSuccess`/`OnStringLoadError` callbacks;
+- `AsyncStringDownloadExample` awaits `VRCAsync.LoadStringAsync(url, out result)`
+  while keeping the traditional `OnStringLoadSuccess`/`OnStringLoadError`
+  callbacks;
 - `AsyncImageDownloadExample` awaits `VRCAsync.LoadImageAsync` while keeping
   the traditional image callbacks;
 - `AsyncVideoLoadExample` and `AsyncVideoEndExample` cover video readiness,
@@ -27,9 +28,12 @@ Currently supported in this slice:
   GPU readback, manual serialization, and Creator Economy list operations.
 
 For SDK awaits, the traditional callback body runs first and receives the SDK
-result. The generated await continuation runs afterward. This initial slice
-uses the callback to store result data in behaviour fields; assigning a
-`Task<T>` result directly to an async local is not supported yet.
+result. For the string downloader's `out` overload, the compiler then copies
+that SDK result into the supplied instance behaviour field before running the
+generated await continuation. The original `LoadStringAsync(url)` overload
+remains available. Array elements and async locals are rejected until their
+storage locations can be safely hoisted. Assigning a `Task<T>` result directly
+to an async local is not supported yet.
 
 Do not start another string request with the same URL on the behaviour while its
 await is pending. String completion is correlated by URL; image completion is

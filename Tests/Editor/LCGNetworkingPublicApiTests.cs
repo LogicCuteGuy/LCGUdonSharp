@@ -187,8 +187,19 @@ public class PacketReceiver
         [Test]
         public void VRCAsync_ExposesBuildTimeAwaitableApi()
         {
-            Assert.That(typeof(VRCAsync).GetMethod(nameof(VRCAsync.LoadStringAsync)).ReturnType,
+            MethodInfo stringTaskOverload = typeof(VRCAsync).GetMethod(nameof(VRCAsync.LoadStringAsync),
+                new[] { typeof(VRC.SDKBase.VRCUrl) });
+            MethodInfo stringOutOverload = typeof(VRCAsync).GetMethod(nameof(VRCAsync.LoadStringAsync),
+                new[]
+                {
+                    typeof(VRC.SDKBase.VRCUrl),
+                    typeof(VRC.SDK3.StringLoading.IVRCStringDownload).MakeByRefType(),
+                });
+            Assert.That(stringTaskOverload.ReturnType,
                 Is.EqualTo(typeof(Task<VRC.SDK3.StringLoading.IVRCStringDownload>)));
+            Assert.That(stringOutOverload, Is.Not.Null);
+            Assert.That(stringOutOverload.ReturnType, Is.EqualTo(typeof(Task)));
+            Assert.That(stringOutOverload.GetParameters()[1].IsOut, Is.True);
             Assert.That(typeof(VRCAsync).GetMethod(nameof(VRCAsync.LoadImageAsync)).ReturnType,
                 Is.EqualTo(typeof(Task<VRC.SDK3.Image.IVRCImageDownload>)));
             Assert.That(typeof(VRCAsync).GetMethod(nameof(VRCAsync.LoadVideoAsync)).ReturnType,
@@ -392,31 +403,101 @@ namespace UdonSharp
     public static class VRCAsync
     {
         public static Task<VRC.SDK3.StringLoading.IVRCStringDownload> LoadStringAsync(VRC.SDKBase.VRCUrl url) => null;
+        public static Task LoadStringAsync(VRC.SDKBase.VRCUrl url,
+            out VRC.SDK3.StringLoading.IVRCStringDownload result) { result = null; return null; }
     }
 }
 public class Sample : VRC.Udon.Common.Interfaces.IUdonEventReceiver
 {
     private VRC.SDKBase.VRCUrl url;
+    private VRC.SDK3.StringLoading.IVRCStringDownload result;
     public async void Run()
     {
-        await UdonSharp.VRCAsync.LoadStringAsync(url);
-        Continued();
+        await UdonSharp.VRCAsync.LoadStringAsync(url, out result);
+        Continued(result);
     }
     public void OnStringLoadSuccess(VRC.SDK3.StringLoading.IVRCStringDownload result) { Legacy(); }
     public void OnStringLoadError(VRC.SDK3.StringLoading.IVRCStringDownload result) { Legacy(); }
     private void Legacy() { }
-    private void Continued() { }
+    private void Continued(VRC.SDK3.StringLoading.IVRCStringDownload result) { }
 }");
 
             Compiler.Lowering.AsyncSyntaxLoweringResult result = RewriteAsyncWithSemantics(source);
-            string lowered = result.Tree.GetRoot().ToFullString();
+            SyntaxNode loweredRoot = result.Tree.GetRoot();
+            string lowered = loweredRoot.ToFullString();
+            string[] callbacks = loweredRoot.DescendantNodes()
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax>()
+                .Where(method => method.Identifier.ValueText == "OnStringLoadSuccess" ||
+                                 method.Identifier.ValueText == "OnStringLoadError")
+                .Select(method => method.NormalizeWhitespace().ToFullString())
+                .ToArray();
             Assert.That(result.Diagnostics, Is.Empty,
                 string.Join(" | ", result.Diagnostics.Select(diagnostic => diagnostic.Message)));
             Assert.That(lowered, Does.Contain("VRCStringDownloader.LoadUrl"));
             Assert.That(lowered, Does.Contain("result.Url.Get() == __uasync_"));
-            Assert.That(lowered.IndexOf("Legacy();", StringComparison.Ordinal),
-                Is.LessThan(lowered.LastIndexOf("_resume();", StringComparison.Ordinal)));
+            Assert.That(callbacks, Has.Length.EqualTo(2));
+            foreach (string callback in callbacks)
+            {
+                Assert.That(callback, Does.Contain("this.result = result;"));
+                Assert.That(callback.IndexOf("Legacy();", StringComparison.Ordinal),
+                    Is.LessThan(callback.IndexOf("this.result = result;", StringComparison.Ordinal)));
+                Assert.That(callback.IndexOf("this.result = result;", StringComparison.Ordinal),
+                    Is.LessThan(callback.IndexOf("_resume();", StringComparison.Ordinal)));
+            }
             Assert.That(lowered, Does.Not.Contain("await UdonSharp.VRCAsync"));
+        }
+
+        [Test]
+        public void AsyncLowering_RejectsUnsupportedStringOutTargets()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System.Threading.Tasks;
+namespace VRC.SDKBase { public class VRCUrl { public string Get() => """"; } }
+namespace VRC.SDK3.StringLoading { public interface IVRCStringDownload { VRC.SDKBase.VRCUrl Url { get; } } }
+namespace UdonSharp
+{
+    public static class VRCAsync
+    {
+        public static Task LoadStringAsync(VRC.SDKBase.VRCUrl url,
+            out VRC.SDK3.StringLoading.IVRCStringDownload result) { result = null; return null; }
+    }
+}
+public class PropertyTarget
+{
+    private VRC.SDKBase.VRCUrl url;
+    private VRC.SDK3.StringLoading.IVRCStringDownload Result { get; set; }
+    public async void Run() { await UdonSharp.VRCAsync.LoadStringAsync(url, out Result); }
+}
+public class MultiDimensionalTarget
+{
+    private VRC.SDKBase.VRCUrl url;
+    private VRC.SDK3.StringLoading.IVRCStringDownload[,] results =
+        new VRC.SDK3.StringLoading.IVRCStringDownload[1, 1];
+    public async void Run() { await UdonSharp.VRCAsync.LoadStringAsync(url, out results[0, 0]); }
+}
+public class ArrayElementTarget
+{
+    private VRC.SDKBase.VRCUrl url;
+    private VRC.SDK3.StringLoading.IVRCStringDownload[] results =
+        new VRC.SDK3.StringLoading.IVRCStringDownload[1];
+    public async void Run() { await UdonSharp.VRCAsync.LoadStringAsync(url, out results[0]); }
+}
+public class LocalTarget
+{
+    private VRC.SDKBase.VRCUrl url;
+    public async void Run()
+    {
+        await UdonSharp.VRCAsync.LoadStringAsync(url,
+            out VRC.SDK3.StringLoading.IVRCStringDownload result);
+    }
+}");
+
+            Compiler.Lowering.AsyncSyntaxLoweringResult result = RewriteAsyncWithSemantics(source);
+            string[] diagnostics = result.Diagnostics.Select(diagnostic => diagnostic.Message).ToArray();
+
+            Assert.That(diagnostics.Count(message => message.Contains(
+                "instance behaviour field")), Is.EqualTo(3));
+            Assert.That(diagnostics, Has.Some.Contains("Locals in async Udon methods are not supported"));
         }
 
         [Test]

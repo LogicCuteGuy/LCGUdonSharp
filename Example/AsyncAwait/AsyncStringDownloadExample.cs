@@ -11,13 +11,14 @@ namespace LogicCuteGuy.LCGUdonSharp.Examples.AsyncAwait
         [SerializeField] private VRCUrl url;
 
         private string _lastDownloadedText;
+        private IVRCStringDownload _awaitResult;
 
         public override async void Interact()
         {
             Debug.Log("[Async string] Starting VRCStringDownloader request.");
-            await VRCAsync.LoadStringAsync(url);
-            Debug.Log("[Async string] Await continuation ran after the legacy callback. Text: " +
-                      _lastDownloadedText);
+            await VRCAsync.LoadStringAsync(url, out _awaitResult);
+            Debug.Log("[Async string] Await continuation received the result after the legacy callback. Text: " +
+                      _awaitResult.Result + ", callback text: " + _lastDownloadedText);
         }
 
         // Traditional Udon callback code remains valid. The compiler appends its

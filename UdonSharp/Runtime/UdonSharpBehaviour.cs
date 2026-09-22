@@ -577,6 +577,13 @@ namespace UdonSharp
         public static System.Threading.Tasks.Task<VRC.SDK3.StringLoading.IVRCStringDownload> LoadStringAsync(
             VRC.SDKBase.VRCUrl url) => Intrinsic<VRC.SDK3.StringLoading.IVRCStringDownload>();
 
+        public static System.Threading.Tasks.Task LoadStringAsync(VRC.SDKBase.VRCUrl url,
+            out VRC.SDK3.StringLoading.IVRCStringDownload result)
+        {
+            result = null;
+            return Intrinsic<VRC.SDK3.StringLoading.IVRCStringDownload>();
+        }
+
         public static System.Threading.Tasks.Task<VRC.SDK3.Image.IVRCImageDownload> LoadImageAsync(
             VRC.SDK3.Image.VRCImageDownloader downloader, VRC.SDKBase.VRCUrl url,
             UnityEngine.Material material = null, VRC.SDK3.Image.TextureInfo textureInfo = null) =>

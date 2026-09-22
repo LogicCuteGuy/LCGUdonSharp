@@ -1661,6 +1661,7 @@ namespace UdonSharp.Compiler.Lowering
                 internal FieldDeclarationSyntax PendingField;
                 internal string AuxiliaryFieldName;
                 internal FieldDeclarationSyntax AuxiliaryField;
+                internal ExpressionSyntax ResultTarget;
             }
 
             private readonly Func<ClassDeclarationSyntax, bool> _shouldRewriteClass;
@@ -1930,11 +1931,18 @@ namespace UdonSharp.Compiler.Lowering
                 FieldDeclarationSyntax pendingField = null;
                 string auxiliaryFieldName = null;
                 FieldDeclarationSyntax auxiliaryField = null;
+                ExpressionSyntax resultTarget = null;
                 if (awaitLowering.Kind == AwaitKind.StringLoad)
                 {
                     ExpressionSyntax url = GetArgument(awaitLowering.Invocation, "url", 0);
                     if (url == null)
                         return Fail(awaitLowering.Invocation, "LoadStringAsync requires a URL argument.");
+                    ArgumentSyntax resultArgument = GetArgumentSyntax(awaitLowering.Invocation, "result", 1);
+                    if (resultArgument != null)
+                    {
+                        if (!TryGetStringResultTarget(resultArgument, out resultTarget))
+                            return false;
+                    }
                     pendingField = (FieldDeclarationSyntax)SyntaxFactory.ParseMemberDeclaration(
                         $"[System.NonSerialized] private VRC.SDKBase.VRCUrl {pendingFieldName};");
                     statements.Add(SyntaxFactory.ParseStatement($"{pendingFieldName} = {url};"));
@@ -2062,6 +2070,7 @@ namespace UdonSharp.Compiler.Lowering
                     PendingField = pendingField,
                     AuxiliaryFieldName = auxiliaryFieldName,
                     AuxiliaryField = auxiliaryField,
+                    ResultTarget = resultTarget,
                 });
                 return true;
             }
@@ -2185,17 +2194,58 @@ namespace UdonSharp.Compiler.Lowering
             private static ExpressionSyntax GetArgument(InvocationExpressionSyntax invocation,
                 string parameterName, int positionalIndex)
             {
+                return GetArgumentSyntax(invocation, parameterName, positionalIndex)?.Expression;
+            }
+
+            private static ArgumentSyntax GetArgumentSyntax(InvocationExpressionSyntax invocation,
+                string parameterName, int positionalIndex)
+            {
                 foreach (ArgumentSyntax argument in invocation.ArgumentList.Arguments)
                 {
                     if (argument.NameColon?.Name.Identifier.ValueText == parameterName)
-                        return argument.Expression;
+                        return argument;
                 }
 
                 if (positionalIndex < invocation.ArgumentList.Arguments.Count &&
                     invocation.ArgumentList.Arguments[positionalIndex].NameColon == null)
-                    return invocation.ArgumentList.Arguments[positionalIndex].Expression;
+                    return invocation.ArgumentList.Arguments[positionalIndex];
 
                 return null;
+            }
+
+            private bool TryGetStringResultTarget(ArgumentSyntax argument,
+                out ExpressionSyntax resultTarget)
+            {
+                resultTarget = null;
+                if (!argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword))
+                    return Fail(argument, "LoadStringAsync result argument must use the 'out' keyword.");
+
+                if (argument.Expression is IdentifierNameSyntax identifier)
+                {
+                    if (!IsInstanceField(identifier))
+                        return Fail(argument,
+                            "LoadStringAsync out result must be an instance behaviour field.");
+                    resultTarget = SyntaxFactory.MemberAccessExpression(
+                            SyntaxKind.SimpleMemberAccessExpression,
+                            SyntaxFactory.ThisExpression(), identifier.WithoutTrivia())
+                        .WithTriviaFrom(identifier);
+                    return true;
+                }
+
+                if (argument.Expression is MemberAccessExpressionSyntax memberAccess &&
+                    memberAccess.Expression is ThisExpressionSyntax && IsInstanceField(memberAccess))
+                {
+                    resultTarget = memberAccess;
+                    return true;
+                }
+
+                return Fail(argument,
+                    "LoadStringAsync out result must be an instance behaviour field.");
+            }
+
+            private bool IsInstanceField(ExpressionSyntax expression)
+            {
+                return _semanticModel?.GetSymbolInfo(expression).Symbol is IFieldSymbol field && !field.IsStatic;
             }
 
             private void WeaveSdkCallbacks(List<MemberDeclarationSyntax> members,
@@ -2295,6 +2345,8 @@ namespace UdonSharp.Compiler.Lowering
                 var actions = new List<string>();
                 if (dispatch.Kind == AwaitKind.VideoLoad && callbackName == "OnVideoReady")
                     actions.Add($"if ({dispatch.AuxiliaryFieldName}) {dispatch.PendingFieldName}.Play();");
+                if (dispatch.ResultTarget != null)
+                    actions.Add($"{dispatch.ResultTarget} = {parameterNames[0]};");
                 if (dispatch.AuxiliaryFieldName != null)
                     actions.Add($"{dispatch.AuxiliaryFieldName} = false;");
                 if (dispatch.PendingFieldName != null)
