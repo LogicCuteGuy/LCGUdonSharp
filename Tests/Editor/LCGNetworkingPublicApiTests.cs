@@ -472,6 +472,93 @@ public class Sample : VRC.Udon.Common.Interfaces.IUdonEventReceiver
         }
 
         [Test]
+        public void AsyncLowering_PreservesRefOutCallsAcrossImageAwait()
+        {
+            SyntaxTree source = CSharpSyntaxTree.ParseText(@"
+using System.Threading.Tasks;
+namespace UnityEngine { public class Material { } }
+namespace VRC.SDKBase { public class VRCUrl { } }
+namespace VRC.Udon.Common.Interfaces { public interface IUdonEventReceiver { } }
+namespace VRC.SDK3.Image
+{
+    public class TextureInfo { }
+    public interface IVRCImageDownload { }
+    public class VRCImageDownloader
+    {
+        public IVRCImageDownload DownloadImage(VRC.SDKBase.VRCUrl url, UnityEngine.Material material,
+            VRC.Udon.Common.Interfaces.IUdonEventReceiver receiver, TextureInfo textureInfo) => null;
+    }
+}
+namespace UdonSharp
+{
+    public static class VRCAsync
+    {
+        public static Task<VRC.SDK3.Image.IVRCImageDownload> LoadImageAsync(
+            VRC.SDK3.Image.VRCImageDownloader downloader, VRC.SDKBase.VRCUrl url,
+            UnityEngine.Material material = null, VRC.SDK3.Image.TextureInfo textureInfo = null) => null;
+    }
+}
+public class Sample : VRC.Udon.Common.Interfaces.IUdonEventReceiver
+{
+    private VRC.SDK3.Image.VRCImageDownloader downloader;
+    private VRC.SDKBase.VRCUrl url;
+    private int attempts;
+    private bool completed;
+    private int[] callbackCounts = new int[1];
+
+    public async void Run()
+    {
+        Begin(ref attempts, out completed);
+        await UdonSharp.VRCAsync.LoadImageAsync(downloader, url);
+        Finish(ref callbackCounts[0], out completed);
+        Observe(completed);
+    }
+
+    public void OnImageLoadSuccess(VRC.SDK3.Image.IVRCImageDownload result) { }
+    public void OnImageLoadError(VRC.SDK3.Image.IVRCImageDownload result) { }
+    private void Begin(ref int count, out bool done) { count++; done = false; }
+    private void Finish(ref int count, out bool done) { count++; done = true; }
+    private void Observe(bool value) { }
+}");
+
+            Compiler.Lowering.AsyncSyntaxLoweringResult result = RewriteAsyncWithSemantics(source);
+            SyntaxNode loweredRoot = result.Tree.GetRoot();
+            var loweredMethods = loweredRoot.DescendantNodes()
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax>().ToArray();
+            string entry = loweredMethods.Single(method => method.Identifier.ValueText == "Run")
+                .NormalizeWhitespace().ToFullString();
+            string resume = loweredMethods.Single(method =>
+                    method.Identifier.ValueText.StartsWith("__uasync_") &&
+                    method.Identifier.ValueText.EndsWith("_Run_resume"))
+                .NormalizeWhitespace().ToFullString();
+            string lowered = loweredRoot.NormalizeWhitespace().ToFullString();
+
+            Assert.That(result.Diagnostics, Is.Empty,
+                string.Join(" | ", result.Diagnostics.Select(diagnostic => diagnostic.Message)));
+            Assert.That(entry, Does.Contain("Begin(ref attempts, out completed);"));
+            Assert.That(entry.IndexOf("Begin(", StringComparison.Ordinal),
+                Is.LessThan(entry.IndexOf("DownloadImage(", StringComparison.Ordinal)));
+            Assert.That(entry, Does.Not.Contain("Finish("));
+            Assert.That(resume, Does.Not.Contain("Begin("));
+            Assert.That(resume, Does.Contain("Finish(ref callbackCounts[0], out completed);"));
+            Assert.That(resume.IndexOf("Finish(", StringComparison.Ordinal),
+                Is.LessThan(resume.IndexOf("Observe(completed)", StringComparison.Ordinal)));
+            Assert.That(lowered, Does.Not.Contain("await UdonSharp.VRCAsync"));
+
+            CSharpCompilation loweredCompilation = CSharpCompilation.Create("AsyncRefOutLoweringTest",
+                new[] { result.Tree },
+                new[]
+                {
+                    MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
+                    MetadataReference.CreateFromFile(typeof(Task).Assembly.Location),
+                },
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            Assert.That(loweredCompilation.GetDiagnostics()
+                    .Where(diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error),
+                Is.Empty);
+        }
+
+        [Test]
         public void AsyncLowering_LowersVideoGpuSerializationAndEconomyAdapters()
         {
             SyntaxTree source = CSharpSyntaxTree.ParseText(@"

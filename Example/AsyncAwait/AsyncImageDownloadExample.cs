@@ -13,6 +13,9 @@ namespace LogicCuteGuy.LCGUdonSharp.Examples.AsyncAwait
 
         private VRCImageDownloader _downloader;
         private Texture2D _lastDownloadedTexture;
+        private int _requestCount;
+        private bool _awaitCompleted;
+        private int[] _completionCounts = new int[1];
 
         private void Start()
         {
@@ -21,10 +24,27 @@ namespace LogicCuteGuy.LCGUdonSharp.Examples.AsyncAwait
 
         public override async void Interact()
         {
+            BeginRequest(ref _requestCount, out _awaitCompleted);
             Debug.Log("[Async image] Starting VRCImageDownloader request.");
             await VRCAsync.LoadImageAsync(_downloader, imageUrl, targetMaterial);
+            CompleteRequest(ref _completionCounts[0], out _awaitCompleted);
             Debug.Log("[Async image] Await continuation ran after the legacy callback. Texture: " +
-                      _lastDownloadedTexture);
+                      _lastDownloadedTexture + ", requests=" + _requestCount +
+                      ", completions=" + _completionCounts[0] +
+                      ", completed=" + _awaitCompleted);
+        }
+
+        // Ordinary C# ref/out methods can run on either side of an SDK await.
+        private void BeginRequest(ref int requestCount, out bool completed)
+        {
+            requestCount++;
+            completed = false;
+        }
+
+        private void CompleteRequest(ref int completionCount, out bool completed)
+        {
+            completionCount++;
+            completed = true;
         }
 
         // The request identity is used to match this callback to the await.
