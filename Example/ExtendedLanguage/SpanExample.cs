@@ -20,7 +20,7 @@ namespace LogicCuteGuy.LCGUdonSharp.Examples.ExtendedLanguage
             int[] snapshot = window.ToArray();
             window.Clear();
 
-            Debug.Log("[Span] copied=" + snapshot.Length + ", backing=" + values[1]);
+            Debug.Log("[Span] copied=" + snapshot.Length + ", backing=" + values[0]);
         }
 
         // Span fields, returns, boxing/capture, stackalloc, unmanaged memory, and

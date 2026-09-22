@@ -38,14 +38,13 @@ replaces `VRC_ObjectSync` with a generated manual relay.
 ## Scene setup
 
 1. Fix any unrelated C# compilation errors and let Unity finish compiling.
-2. Select **Tools > UdonSharp Networking Example > Create Example** (when the
-   menu command is available) or manually add the components to scene objects:
+2. Open `../TestLCGUdonSharp.unity`, or manually add the components to scene
+   objects (each showcase `.cs` already ships with its paired UdonSharp `.asset`):
    - Place an `LCGNetworkZone` on a trigger collider that covers the play area.
    - Add the desired showcase behaviour to a child object.
    - For `LCGZoneObjectShowcase`, add a `VRC_ObjectSync` component to the
      synced child — the build processor replaces it automatically.
-3. Create missing UdonSharp `.asset` files if the menu command is not used.
-4. Enter Play Mode. Play Mode and Build/Test scene copies receive one
+3. Enter Play Mode. Play Mode and Build/Test scene copies receive one
    `LCGRuntime`, one PlayerObject mailbox template, and ownership guards.
 
 ## Ownership
