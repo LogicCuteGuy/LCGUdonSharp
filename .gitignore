@@ -61,3 +61,8 @@ desktop.ini
 *.tmp
 *.swp
 *~
+
+# Release tooling is source; the local installer payload remains generated.
+!/Tools~/
+!/Tools~/**
+__pycache__/

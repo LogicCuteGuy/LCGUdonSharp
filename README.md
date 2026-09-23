@@ -128,7 +128,15 @@ Udon assembly (runs in VRChat)
 
 ### Steps
 
-1. Add the package to your project (VPM manifest or local package reference):
+For installation in another project, use the **built VPM release ZIP**, not GitHub's
+automatic source ZIP or a copy of this developer checkout. The release keeps the
+compiler in `Payload~/UdonSharp` until the bootstrap installer has backed up and
+removed the SDK copy. It preserves the SDK's `.meta` GUIDs so existing assemblies
+and program assets keep their references. Examples are optional Package Manager
+samples; import them after compiler installation finishes.
+
+1. Add the built release through VPM, or use a local reference to the **extracted
+   release ZIP** (not the developer checkout):
 
    ```json
    "com.logiccuteguy.lcgudonsharp": "file:../path/to/com.logiccuteguy.lcgudonsharp"
@@ -143,6 +151,26 @@ Udon assembly (runs in VRChat)
 ### Uninstalling
 
 > **Important:** Use **Tools > LCGUdonSharp > Restore VRChat UdonSharp and Disable Auto Setup** *before* removing the package. This restores the backed-up SDK copy and removes the generated compiler folder.
+
+### Building an installable release
+
+From the package's repository checkout, run:
+
+```powershell
+python Tools~/test_release.py
+python Tools~/build_release.py --output ../../Releases/com.logiccuteguy.lcgudonsharp-install-fix.zip
+```
+
+Publish the resulting ZIP through the VPM listing. The builder reads the tracked
+`UdonSharp/` source, preserves its metadata, and packages it under `Payload~`.
+It excludes active compiler copies and developer tests, and places `Example/`
+under `Samples~/Examples`. A plain `git archive`, GitHub source download, or
+whole-folder ZIP does **not** produce this installation layout. The ignored local
+`Payload~` directory is not the release source of truth.
+
+The installer validates the payload and its staged copy before replacing either
+compiler. Missing metadata, changed core SDK GUIDs, or missing compiler DLLs stop
+installation with an explicit error rather than deleting the working SDK compiler.
 
 ---
 

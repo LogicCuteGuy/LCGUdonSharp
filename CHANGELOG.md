@@ -1,5 +1,15 @@
 # LCGUdonSharp Changelog
 
+## Unreleased
+
+- Added a validated VPM release builder that ships the compiler in `Payload~`,
+  exposes examples as optional samples, and excludes active compiler copies and
+  developer tests from the first import.
+- Validate payload metadata, core SDK GUIDs, and compiler dependencies before
+  replacing the SDK compiler, including after staging the payload.
+- Added regression checks for fresh-import layout, preserved compiler bytes,
+  changed GUIDs, missing metadata, and missing compiler DLLs.
+
 ## 0.3.2 - 2026-09-23
 
 - Updated the package guide and every example README for the 0.3.2 release.
