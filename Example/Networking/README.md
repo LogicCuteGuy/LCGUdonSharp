@@ -1,6 +1,6 @@
 # LCG Manual Packet Networking Examples
 
-> Documentation version: **0.3.2** · [All examples](../README.md) · [Package guide](../../README.md)
+> Documentation version: **0.3.4** · [All examples](../README.md) · [Package guide](../../README.md)
 
 These three examples demonstrate the `[LCGPacket]` attribute system for
 manual networked state and method delivery inside an `LCGNetworkZone`.

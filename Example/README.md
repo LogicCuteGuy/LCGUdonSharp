@@ -1,6 +1,6 @@
 # LCGUdonSharp examples
 
-> Documentation version: **0.3.2** · [Package guide](../README.md)
+> Documentation version: **0.3.4** · [Package guide](../README.md)
 
 Runnable UdonSharp behaviours for the LCGUdonSharp 0.3.x feature set. Open **`TestLCGUdonSharp.unity`** to get a scene with the networking showcases wired up, or add any example component to a GameObject in your own scene.
 

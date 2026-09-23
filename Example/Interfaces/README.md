@@ -1,6 +1,6 @@
 # UdonSharp Interface Example
 
-> Documentation version: **0.3.2** · [All examples](../README.md) · [Package guide](../../README.md)
+> Documentation version: **0.3.4** · [All examples](../README.md) · [Package guide](../../README.md)
 
 This example demonstrates one interface with two independent `UdonSharpBehaviour`
 implementations. `InterfaceExampleRunner` invokes both implementations through
