@@ -13,7 +13,7 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer
     {
         internal const string PackageName = "com.logiccuteguy.lcgudonsharp";
         internal const string SupportedSdkVersion = "3.10.5";
-        internal const string InstallerVersion = "0.1.0";
+        internal const string InstallerVersion = "0.1.2";
 
         private const string WorldsPackageName = "com.vrchat.worlds";
         private const string StateRelativePath = "ProjectSettings/LogicCuteGuy.LCGUdonSharp.json";
@@ -155,8 +155,8 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer
                 RequirePathWithin(projectRoot, workspace, "installer workspace");
                 RequirePathWithin(projectRoot, backup, "backup");
 
-                if (!Directory.Exists(payload))
-                    throw new DirectoryNotFoundException("Compiler payload was not found at " + payload);
+                // Validate before backing up, deleting, or replacing either compiler.
+                InstallerPayloadValidator.Validate(payload);
 
                 MigrateLegacyBackup(projectRoot, worldsPackage.version, backup);
 
@@ -169,6 +169,7 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer
 
                 CopyDirectory(payload, staging);
                 CopyMetaIfPresent(payload, staging);
+                InstallerPayloadValidator.Validate(staging);
 
                 if (Directory.Exists(sdkUdonSharp) && !Directory.Exists(backup))
                 {

@@ -61,3 +61,8 @@ desktop.ini
 *.tmp
 *.swp
 *~
+
+# Release build scripts are source, while Payload~ remains generated.
+!/Tools~/
+!/Tools~/**
+__pycache__/
