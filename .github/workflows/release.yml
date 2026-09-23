@@ -1,0 +1,57 @@
+name: Validate and publish package
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['0.*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test release packaging
+        run: python 'Tools~/test_release.py'
+      - name: Build installable package
+        shell: python
+        run: |
+          import json, os, subprocess, sys, zipfile
+          from pathlib import Path
+          manifest = json.loads(Path('package.json').read_text())
+          version = manifest['version']
+          if os.environ['GITHUB_REF_TYPE'] == 'tag':
+              assert os.environ['GITHUB_REF_NAME'] == version, 'Tag must match package version'
+          archive = Path('dist') / f"{manifest['name']}-{version}.zip"
+          subprocess.run([sys.executable, 'Tools~/build_release.py', '--output', str(archive)], check=True)
+          with zipfile.ZipFile(archive) as package:
+              Path('dist/package.json').write_bytes(package.read('package.json'))
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vpm-package
+          path: dist/*
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: vpm-package
+          path: dist
+      - name: Publish validated release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" dist/* --verify-tag --title "$RELEASE_TAG" --generate-notes

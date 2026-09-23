@@ -1,7 +1,7 @@
 {
   "name": "com.logiccuteguy.lcgudonsharp",
   "displayName": "LCGUdonSharp",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "unity": "2022.3",
   "license": "MIT",
   "description": "Adds source-interface support to UdonSharp and installs the compiler inside LCGUdonSharp instead of VRChat Worlds.",

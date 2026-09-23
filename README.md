@@ -5,7 +5,7 @@
 [![Unity](https://img.shields.io/badge/Unity-2022.3-blue)](https://unity.com/)
 [![VRChat Worlds SDK](https://img.shields.io/badge/VRChat_Worlds_SDK-3.10.5-orange)](https://github.com/VRChat/worlds)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE.md)
-[![Package Version](https://img.shields.io/badge/version-0.3.2-informational)](package.json)
+[![Package Version](https://img.shields.io/badge/version-0.3.3-informational)](package.json)
 
 LCGUdonSharp extends the UdonSharp compiler with C# interfaces, synchronous compiler-managed `try`/`catch`, build-time `async/await` lowering, extended language constructs (`ref`/`out`, closed generics, LINQ closures, `dynamic`, `Span<T>`), and a manual packet networking layer — while keeping every modified source file inside `Packages/com.logiccuteguy.lcgudonsharp` instead of the VRChat SDK or `Assets`.
 
@@ -121,6 +121,16 @@ Udon assembly (runs in VRChat)
 
 ## Installation & Setup
 
+Install **0.3.3 or later** through VCC/ALCOM, or use the named package ZIP from
+GitHub Releases. The earlier `0.3.2` distribution was packaged incorrectly and
+could leave new projects without the compiler payload. Update affected projects
+to `0.3.3`; the installer will repair the compiler after Unity refreshes.
+
+Do not install GitHub's automatic **Source code (zip)** archive as a Unity package.
+Installable releases place the compiler in `Payload~/UdonSharp` so only the
+bootstrap installer compiles before the SDK compiler is replaced. Examples are
+optional samples, imported after setup completes.
+
 ### Requirements
 
 - Unity **2022.3**
@@ -128,15 +138,7 @@ Udon assembly (runs in VRChat)
 
 ### Steps
 
-For installation in another project, use the **built VPM release ZIP**, not GitHub's
-automatic source ZIP or a copy of this developer checkout. The release keeps the
-compiler in `Payload~/UdonSharp` until the bootstrap installer has backed up and
-removed the SDK copy. It preserves the SDK's `.meta` GUIDs so existing assemblies
-and program assets keep their references. Examples are optional Package Manager
-samples; import them after compiler installation finishes.
-
-1. Add the built release through VPM, or use a local reference to the **extracted
-   release ZIP** (not the developer checkout):
+1. Refresh the LogicCuteGuy repository in VCC/ALCOM and install or update LCGUdonSharp to `0.3.3`. For a local package reference, extract the named release ZIP first and reference that extracted folder:
 
    ```json
    "com.logiccuteguy.lcgudonsharp": "file:../path/to/com.logiccuteguy.lcgudonsharp"
@@ -151,26 +153,6 @@ samples; import them after compiler installation finishes.
 ### Uninstalling
 
 > **Important:** Use **Tools > LCGUdonSharp > Restore VRChat UdonSharp and Disable Auto Setup** *before* removing the package. This restores the backed-up SDK copy and removes the generated compiler folder.
-
-### Building an installable release
-
-From the package's repository checkout, run:
-
-```powershell
-python Tools~/test_release.py
-python Tools~/build_release.py --output ../../Releases/com.logiccuteguy.lcgudonsharp-install-fix.zip
-```
-
-Publish the resulting ZIP through the VPM listing. The builder reads the tracked
-`UdonSharp/` source, preserves its metadata, and packages it under `Payload~`.
-It excludes active compiler copies and developer tests, and places `Example/`
-under `Samples~/Examples`. A plain `git archive`, GitHub source download, or
-whole-folder ZIP does **not** produce this installation layout. The ignored local
-`Payload~` directory is not the release source of truth.
-
-The installer validates the payload and its staged copy before replacing either
-compiler. Missing metadata, changed core SDK GUIDs, or missing compiler DLLs stop
-installation with an explicit error rather than deleting the working SDK compiler.
 
 ---
 
@@ -523,6 +505,11 @@ LCG network logging is off by default. Enable **Edit > Project Settings > Udon S
 LCGUdonSharp builds on [UdonSharp](https://github.com/MerlinSan/UdonSharp), originally created by Merlin, and on the VRChat Worlds SDK. The compiler retains UdonSharp's original namespaces and assembly names so existing projects continue to work unchanged.
 
 ## Contributing
+
+Build installable releases with `python Tools~/build_release.py --output dist/com.logiccuteguy.lcgudonsharp-0.3.3.zip`.
+Run `python Tools~/test_release.py` first. A raw `git archive` is not an installable
+release. The release workflow validates the package on pull requests and `main`,
+and publishes the generated ZIP and its matching `package.json` for version tags.
 
 Bug reports, feature requests, and pull requests are welcome in the project repository. When reporting a compiler diagnostic, include the Unity version, the Worlds SDK version, and the smallest snippet that reproduces the issue.
 

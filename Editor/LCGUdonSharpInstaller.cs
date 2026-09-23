@@ -13,7 +13,7 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer
     {
         internal const string PackageName = "com.logiccuteguy.lcgudonsharp";
         internal const string SupportedSdkVersion = "3.10.5";
-        internal const string InstallerVersion = "0.1.1";
+        internal const string InstallerVersion = "0.1.2";
 
         private const string WorldsPackageName = "com.vrchat.worlds";
         private const string StateRelativePath = "ProjectSettings/LogicCuteGuy.LCGUdonSharp.json";

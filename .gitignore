@@ -62,7 +62,7 @@ desktop.ini
 *.swp
 *~
 
-# Release tooling is source; the local installer payload remains generated.
+# Release build scripts are source, while Payload~ remains generated.
 !/Tools~/
 !/Tools~/**
 __pycache__/
