@@ -1,6 +1,6 @@
 # Async/await UdonSharp example
 
-> Documentation version: **0.3.4** · [All examples](../README.md) · [Package guide](../../README.md)
+> Documentation version: **0.3.5** · [All examples](../README.md) · [Package guide](../../README.md)
 
 This folder contains real U# examples for the build-time async lowering:
 
