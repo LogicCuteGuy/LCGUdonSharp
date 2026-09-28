@@ -1,5 +1,10 @@
 # LCGUdonSharp Changelog
 
+## Unreleased
+
+- Allow Continuous Udon behaviours without synced fields inside `LCGNetworkZone`.
+- Add opt-in native-sync passthrough for existing third-party hierarchies. Passthrough preserves VRChat sync semantics but is explicitly not zone-scoped.
+
 ## 0.3.4 - 2026-09-23
 
 - Refresh the collection example program asset to match its current collection fields and Manual synchronization mode.

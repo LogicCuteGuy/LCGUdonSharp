@@ -22,7 +22,7 @@ namespace UdonSharp
     /// Event-driven replacement for VRCObjectSync below an LCG network zone.
     /// </summary>
     [PublicAPI]
-    [UdonBehaviourSyncMode(BehaviourSyncMode.Manual)]
+    [UdonBehaviourSyncMode(BehaviourSyncMode.NoVariableSync)]
     public sealed class LCGManualObjectSync : UdonSharpBehaviour
     {
         [SerializeField, HideInInspector] private LCGRuntime runtime;

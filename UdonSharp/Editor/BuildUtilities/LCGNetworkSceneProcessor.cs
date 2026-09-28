@@ -130,7 +130,7 @@ namespace UdonSharpEditor
                     changedNetworkObjects.Add(target);
                     LCGZoneOwnershipGuard guard = target.GetComponent<LCGZoneOwnershipGuard>();
                     if (guard == null)
-                        guard = AddSceneBehaviour<LCGZoneOwnershipGuard>(target);
+                        guard = AddSceneBehaviour<LCGZoneOwnershipGuard>(target, Networking.SyncType.None);
                     guard.Configure(zone);
 
                     if (objectSync != null)
@@ -138,7 +138,16 @@ namespace UdonSharpEditor
                         Object.DestroyImmediate(objectSync);
                         LCGManualObjectSync manualSync = target.GetComponent<LCGManualObjectSync>();
                         if (manualSync == null)
-                            manualSync = AddSceneBehaviour<LCGManualObjectSync>(target);
+                        {
+                            Networking.SyncType relaySyncMethod = targetReceivers
+                                .Select(receiver => receiver.SyncMethod)
+                                .FirstOrDefault(syncMethod => syncMethod != Networking.SyncType.None &&
+                                                              syncMethod != Networking.SyncType.Unknown);
+                            if (relaySyncMethod == Networking.SyncType.None ||
+                                relaySyncMethod == Networking.SyncType.Unknown)
+                                relaySyncMethod = Networking.SyncType.Manual;
+                            manualSync = AddSceneBehaviour<LCGManualObjectSync>(target, relaySyncMethod);
+                        }
                         manualSync.Configure(runtime, zone, nextReceiverId++);
                     }
                 }
@@ -146,13 +155,6 @@ namespace UdonSharpEditor
                 zone.Configure(zoneIndex + 1, runtime, protectedObjects.ToArray(),
                     scopedObjects.Where(target => target != zone.gameObject).ToArray());
 
-                // NoVariableSync permits either backing sync mode. Use Manual in the
-                // processed zone so it does not retain the SDK's Continuous default.
-                foreach (GameObject target in scopedObjects)
-                    foreach (UdonBehaviour behaviour in target.GetComponents<UdonBehaviour>())
-                        if (behaviour.programSource is UdonSharpProgramAsset asset &&
-                            asset.behaviourSyncMode == BehaviourSyncMode.NoVariableSync)
-                            behaviour.SyncMethod = Networking.SyncType.Manual;
             }
 
             BuildPacketRegistry(scene, runtime, zones, out UdonBehaviour[] receivers, out string[] addresses,
@@ -194,14 +196,15 @@ namespace UdonSharpEditor
                 mailbox.gameObject.SetActive(false);
         }
 
-        private static T AddSceneBehaviour<T>(GameObject target) where T : UdonSharpBehaviour
+        private static T AddSceneBehaviour<T>(GameObject target,
+            Networking.SyncType syncMethod = Networking.SyncType.Manual) where T : UdonSharpBehaviour
         {
             // AddUdonSharpComponent initializes the VM immediately in Play Mode.
             // Scene processing must leave initialization to the SDK after all references
             // and networking settings have been populated.
             T proxy = target.AddComponent<T>();
             UdonSharpEditorUtility.RunBehaviourSetup(proxy);
-            UdonSharpEditorUtility.GetBackingUdonBehaviour(proxy).SyncMethod = Networking.SyncType.Manual;
+            UdonSharpEditorUtility.GetBackingUdonBehaviour(proxy).SyncMethod = syncMethod;
             return proxy;
         }
 
@@ -399,6 +402,10 @@ namespace UdonSharpEditor
 
         private static void ValidateZones(List<LCGNetworkZone> zones)
         {
+            // Collider bounds can lag behind Transform edits in edit-mode scene processing.
+            // Validate the authored positions, not the previous physics pose.
+            Physics.SyncTransforms();
+
             for (int i = 0; i < zones.Count; i++)
             {
                 if (zones[i].GetComponentInParent<VRCPlayerObject>(true) != null ||
@@ -424,27 +431,33 @@ namespace UdonSharpEditor
 
         private static void ValidateZoneBehaviours(LCGNetworkZone zone, List<GameObject> scopedObjects)
         {
+            int passthroughCount = 0;
             foreach (GameObject target in scopedObjects)
             {
                 foreach (UdonBehaviour behaviour in target.GetComponents<UdonBehaviour>())
                 {
-                    bool hasNoVariableSync = behaviour.programSource is UdonSharpProgramAsset noSyncAsset &&
-                                             noSyncAsset.behaviourSyncMode == BehaviourSyncMode.NoVariableSync;
-                    if (behaviour.SyncMethod == Networking.SyncType.Continuous && !hasNoVariableSync)
-                        throw new BuildFailedException(
-                            $"Continuous Udon networking is not supported inside LCGNetworkZone '{GetPath(zone.transform)}': '{GetPath(target.transform)}'.");
-
-                    if (behaviour.programSource is UdonSharpProgramAsset programAsset &&
-                        programAsset.fieldDefinitions != null && programAsset.fieldDefinitions.Values.Any(field =>
-                            field.SyncMode.HasValue && field.SyncMode.Value != UdonSyncMode.NotSynced))
+                    bool hasSyncedFields = behaviour.programSource is UdonSharpProgramAsset syncedAsset &&
+                                           syncedAsset.fieldDefinitions != null &&
+                                           syncedAsset.fieldDefinitions.Values.Any(field =>
+                                               field.SyncMode.HasValue && field.SyncMode.Value != UdonSyncMode.NotSynced);
+                    if (hasSyncedFields && !zone.allowNativeSyncPassthrough)
                         throw new BuildFailedException(
                             $"UdonSynced fields below LCGNetworkZone '{GetPath(zone.transform)}' require the generated zone program variant, which is not available for '{GetPath(target.transform)}'. Build stopped to prevent native sync from leaking outside the zone.");
+
+                    if (hasSyncedFields)
+                        passthroughCount++;
 
                     if (!(behaviour.programSource is UdonSharpProgramAsset))
                         throw new BuildFailedException(
                             $"Udon Graph behaviour cannot be safely inspected or scoped by LCGNetworkZone: '{GetPath(target.transform)}'.");
                 }
             }
+
+            if (passthroughCount > 0)
+                Debug.LogWarning(
+                    $"LCGNetworkZone '{GetPath(zone.transform)}' is passing through native Udon variable sync on {passthroughCount} behaviour(s). " +
+                    "Those variables still broadcast to the whole instance; only LCG packets, ownership, and converted VRC_ObjectSync traffic are zone-scoped.",
+                    zone);
         }
 
         private static List<GameObject> GetScopedObjects(LCGNetworkZone zone)

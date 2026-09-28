@@ -10,6 +10,9 @@ namespace UdonSharp
     public sealed class LCGNetworkZone : UdonSharpBehaviour
     {
         public LCGZoneExitMode exitMode = LCGZoneExitMode.Freeze;
+        [Tooltip("Keep unsupported native Udon variable sync unchanged instead of failing the build. " +
+                 "Those variables still broadcast to the whole instance and are not zone-scoped.")]
+        public bool allowNativeSyncPassthrough;
         [SerializeField, HideInInspector] private int zoneId;
         [SerializeField, HideInInspector] private int epoch;
         [SerializeField, HideInInspector] private LCGRuntime runtime;

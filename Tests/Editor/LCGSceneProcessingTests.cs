@@ -202,22 +202,22 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer.Tests
         }
 
         [Test]
-        public void UnsupportedZoneBehaviour_DoesNotLeavePartiallyGeneratedHelpers()
+        public void ContinuousWithoutSyncedFields_IsAccepted()
         {
             Scene scene = EditorSceneManager.NewPreviewScene();
             try
             {
-                var target = new GameObject("Invalid LCG zone");
+                var target = new GameObject("LCG zone");
                 SceneManager.MoveGameObjectToScene(target, scene);
                 target.AddComponent<BoxCollider>().isTrigger = true;
                 target.AddUdonSharpComponent<LCGNetworkZone>();
                 var receiver = target.AddUdonSharpComponent<LCGManualObjectSync>();
-                UdonSharpEditorUtility.GetBackingUdonBehaviour(receiver).SyncMethod =
-                    VRC.SDKBase.Networking.SyncType.Continuous;
+                var backing = UdonSharpEditorUtility.GetBackingUdonBehaviour(receiver);
+                backing.SyncMethod = VRC.SDKBase.Networking.SyncType.Continuous;
 
-                Assert.Throws<BuildFailedException>(() => CreateProcessor().OnProcessScene(scene, null));
-                Assert.That(scene.GetRootGameObjects(), Has.Length.EqualTo(1));
-                Assert.That(target.GetComponents<LCGZoneOwnershipGuard>(), Is.Empty);
+                CreateProcessor().OnProcessScene(scene, null);
+
+                Assert.That(target.GetComponents<LCGZoneOwnershipGuard>(), Has.Length.EqualTo(1));
             }
             finally { CloseAfterBehaviourSetup(scene); }
         }
@@ -303,6 +303,58 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer.Tests
                 Assert.That(error.Message, Does.Contain("UdonSynced fields"));
                 Assert.That(target.GetComponents<LCGZoneOwnershipGuard>(), Is.Empty);
                 Assert.That(scene.GetRootGameObjects(), Has.Length.EqualTo(1));
+            }
+            finally { CloseAfterBehaviourSetup(scene); }
+        }
+
+        [Test]
+        public void NativeSyncPassthrough_AllowsContinuousBehaviourAndKeepsNativeSync()
+        {
+            Scene scene = EditorSceneManager.NewPreviewScene();
+            try
+            {
+                LCGNetworkZone zone = CreateZone(scene, "Compatibility zone");
+                zone.allowNativeSyncPassthrough = true;
+                var target = new GameObject("Native continuous object");
+                target.transform.SetParent(zone.transform);
+                Type syncedType = Type.GetType(
+                    "LogicCuteGuy.LCGUdonSharp.Examples.AsyncAwait.AsyncSerializationExample, LogicCuteGuy.LCGUdonSharp.Examples",
+                    true);
+                var proxy = target.AddUdonSharpComponent(syncedType);
+                var backing = UdonSharpEditorUtility.GetBackingUdonBehaviour(proxy);
+                backing.SyncMethod = VRC.SDKBase.Networking.SyncType.Continuous;
+
+                CreateProcessor().OnProcessScene(scene, null);
+
+                Assert.That(backing.SyncMethod, Is.EqualTo(VRC.SDKBase.Networking.SyncType.Continuous));
+                Assert.That(backing.programSource.SerializedProgramAsset.RetrieveProgram()
+                    .SyncMetadataTable.GetAllSyncMetadata(), Is.Not.Empty);
+                Assert.That(target.GetComponents<LCGZoneOwnershipGuard>(), Has.Length.EqualTo(1));
+            }
+            finally { CloseAfterBehaviourSetup(scene); }
+        }
+
+        [Test]
+        public void ObjectSyncConversion_DefaultsGeneratedRelayToManual()
+        {
+            Scene scene = EditorSceneManager.NewPreviewScene();
+            try
+            {
+                LCGNetworkZone zone = CreateZone(scene, "Object sync zone");
+                var target = new GameObject("Object sync target");
+                target.transform.SetParent(zone.transform);
+                target.AddComponent<VRC.SDK3.Components.VRCObjectSync>();
+
+                CreateProcessor().OnProcessScene(scene, null);
+
+                Assert.That(target.GetComponent<VRC.SDK3.Components.VRCObjectSync>(), Is.Null);
+                var relay = target.GetComponent<LCGManualObjectSync>();
+                Assert.That(relay, Is.Not.Null);
+                Assert.That(UdonSharpEditorUtility.GetBackingUdonBehaviour(relay).SyncMethod,
+                    Is.EqualTo(VRC.SDKBase.Networking.SyncType.Manual));
+                Assert.That(UdonSharpEditorUtility.GetBackingUdonBehaviour(
+                        target.GetComponent<LCGZoneOwnershipGuard>()).SyncMethod,
+                    Is.EqualTo(VRC.SDKBase.Networking.SyncType.None));
             }
             finally { CloseAfterBehaviourSetup(scene); }
         }

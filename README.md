@@ -376,6 +376,8 @@ Public `void` methods support up to eight supported arguments. Packet field writ
 
 **Network zones:** add `LCGNetworkZone` to a trigger collider to restrict descendant packet recipients and ownership to players inside the trigger. Inside zones, `VRC_ObjectSync` is replaced with a manual relay; script transforms sync on demand via `LCGNetwork.RequestObjectSync(gameObject)` (pickups sync automatically while held).
 
+Third-party behaviours that still use native `[UdonSynced]` fields remain fail-closed by default. For compatibility with an existing hierarchy, enable **Allow Native Sync Passthrough** on the zone. This keeps those behaviours working and lets the zone scope LCG packets, ownership, and converted `VRC_ObjectSync` traffic, but the native synced fields still broadcast to the whole instance and are not optimized by the zone. Continuous behaviours with no synced fields are accepted automatically.
+
 Zone colliders in **separate hierarchies may overlap** — each scene object belongs to its nearest ancestor zone. Zone colliders in the same parent/child hierarchy may **not** overlap; that configuration fails the build before helpers are generated.
 
 <details>
@@ -450,7 +452,7 @@ Two different assets are involved (definitions in [Key terms](#key-terms)):
 - Nested awaits, explicit returns in async, direct `Task<T>` result assignment, multiple simultaneous SDK awaits
 - `await` inside `try`, catch filters, arbitrary thrown expressions, unsupported exception types/constructors/members, and catch variables that escape their catch
 - Catching native extern/VM faults, cross-behaviour or custom-event propagation, floating-point divide-by-zero, overflow, invalid casts, or SDK domain failures
-- Continuous Rigidbody behaviours and networked Udon Graph behaviours **inside zones**
+- Zone-scoped native Continuous fields/interpolation and networked Udon Graph behaviours **inside zones**
 - Overlapping parent/child zones; `[UdonSynced]` fields under a zone (fail closed until per-zone variants ship)
 
 </details>
@@ -495,7 +497,7 @@ LCG network logging is off by default. Enable **Edit > Project Settings > Udon S
 | Installer stops immediately | SDK version must be exactly `3.10.5`. Setup refuses other versions by design. |
 | Duplicate `UdonSharp.*` assemblies | Run **Tools > LCGUdonSharp > Install or Repair** — the SDK's bundled copy may have been restored. |
 | Packet fields not syncing after upgrade | Protocol is versioned (v2): recompile all UdonSharp programs and rebuild the world. |
-| Build fails around `LCGNetworkZone` | Zones fail closed on Continuous bodies, Udon Graph behaviours, overlapping parent/child zones, `[UdonSynced]` under a zone, and PlayerObject templates sharing a hierarchy. Zones in separate hierarchies may overlap. |
+| Build fails around `LCGNetworkZone` | Zones fail closed on native `[UdonSynced]` fields (unless **Allow Native Sync Passthrough** is enabled), Udon Graph behaviours, overlapping parent/child zones, and PlayerObject templates sharing a hierarchy. Continuous behaviours without synced fields are safe. Zones in separate hierarchies may overlap. |
 | Need to uninstall | Run **Restore VRChat UdonSharp and Disable Auto Setup** first, then remove the package. |
 
 ---
