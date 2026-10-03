@@ -348,7 +348,11 @@ namespace UdonSharpEditor
             for (int i = 0; i < allUdonSharpBehaviours.Count; i++)
             {
                 UdonBehaviour behaviour = allUdonSharpBehaviours[i];
-                var program = ((UdonSharpProgramAsset)behaviour.programSource).GetRealProgram();
+                var programAsset = (UdonSharpProgramAsset)behaviour.programSource;
+                // A domain reload leaves the source program cache empty for unchanged
+                // scripts. Their compiled program still defines the packet bindings.
+                var program = programAsset.GetRealProgram() ??
+                              programAsset.SerializedProgramAsset.RetrieveProgram();
                 if (program?.SymbolTable == null || !program.SymbolTable.HasAddressForSymbol("__lcgRuntime"))
                     continue;
                 int receiverId = receiverList.IndexOf(behaviour);

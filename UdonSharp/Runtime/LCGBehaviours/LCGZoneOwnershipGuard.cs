@@ -15,9 +15,22 @@ namespace UdonSharp
             zone = protectedZone;
         }
 
+        public override void OnOwnershipTransferred(VRCPlayerApi player)
+        {
+            // Automatic reassignment bypasses OnOwnershipRequest. Let only the
+            // newly assigned local owner return objects to a valid zone member.
+            if (zone != null && Utilities.IsValid(player) && player.isLocal)
+                zone.RequestOwnershipRepair();
+        }
+
         public override bool OnOwnershipRequest(VRCPlayerApi requestingPlayer, VRCPlayerApi requestedOwner)
         {
-            return zone != null && zone.CanTakeOwnership(requestingPlayer) && zone.CanTakeOwnership(requestedOwner);
+            if (zone == null || !zone.CanTakeOwnership(requestedOwner))
+                return false;
+            // The current owner can hand an object back after leaving the
+            // zone. Outsiders still cannot claim it or assign an outside owner.
+            return zone.CanTakeOwnership(requestingPlayer) ||
+                   (Utilities.IsValid(requestingPlayer) && Networking.GetOwner(gameObject) == requestingPlayer);
         }
     }
 }

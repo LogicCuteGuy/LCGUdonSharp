@@ -21,6 +21,25 @@ namespace UdonSharp
         public const int MaxPendingFieldPackets = 128;
         public const int MaxPendingMethodPackets = 128;
         public const int MaxPacketsPerFrame = 16;
+        public const int MaxPendingMotionPackets = 1024;
+        public const int MaxMotionBatchBytes = 900;
+
+        // Motion is replaceable state, not an RPC history. Keep one current
+        // sample per object/recipient until the transport has room to send it.
+        private object[] pendingMotionFrames = new object[MaxPendingMotionPackets];
+        private VRCPlayerApi[] pendingMotionPlayers = new VRCPlayerApi[MaxPendingMotionPackets];
+        private float[] pendingMotionTimes = new float[MaxPendingMotionPackets];
+        private int pendingMotionCount;
+        private int motionSlotCount;
+        private int motionCursor;
+        private bool motionFlushScheduled;
+        private float nextMotionSendTime;
+        private int motionBatchesSent;
+        private int lastMotionBatchBytes;
+
+        public int PendingMotionCount => pendingMotionCount;
+        public int MotionBatchesSent => motionBatchesSent;
+        public int LastMotionBatchBytes => lastMotionBatchBytes;
 
         [SerializeField] private LCGRuntimePlayer mailboxTemplate;
         [SerializeField] private LCGNetworkZone[] zones = new LCGNetworkZone[0];
@@ -314,6 +333,13 @@ namespace UdonSharp
                 return;
 
             WriteInt32(frame, 24, ownerId);
+            if (__lcgSenderAddress == nameof(LCGManualObjectSync.ApplyObjectState) &&
+                __lcgSenderArgCount == 7 && __lcgSenderReceiver != null &&
+                __lcgSenderReceiver.GetComponent<LCGManualObjectSync>() != null)
+            {
+                QueueObjectMotion(frame, __lcgSenderZoneId, __lcgSenderTargetMode, __lcgSenderPlayer);
+                return;
+            }
             if (pendingMethodCount >= MaxPendingMethodPackets)
                 return;
             int queued = pendingMethodTail;
@@ -444,6 +470,43 @@ namespace UdonSharp
 #endif
                 return;
             }
+
+            if (frame[1] == 3)
+            {
+                // The envelope does not confer authority. Each inner frame
+                // goes through the same zone, owner and replay checks below.
+                if (frame.Length > MaxMotionBatchBytes)
+                    return;
+                int cursor = HeaderSize;
+                while (cursor < frame.Length)
+                {
+                    if (cursor + 2 > frame.Length)
+                        return;
+                    int length = ReadUInt16(frame, cursor);
+                    cursor += 2;
+                    if (length < HeaderSize || cursor + length > frame.Length ||
+                        frame[cursor] != ProtocolVersion || frame[cursor + 1] > 2)
+                        return;
+                    cursor += length;
+                }
+                cursor = HeaderSize;
+                while (cursor < frame.Length)
+                {
+                    int length = ReadUInt16(frame, cursor);
+                    cursor += 2;
+                    byte[] inner = new byte[length];
+                    Buffer.BlockCopy(frame, cursor, inner, 0, length);
+                    ReceiveSingleFrame(inner, sender);
+                    cursor += length;
+                }
+                return;
+            }
+
+            ReceiveSingleFrame(frame, sender);
+        }
+
+        private void ReceiveSingleFrame(byte[] frame, VRCPlayerApi sender)
+        {
 
             int zoneId = ReadInt32(frame, 4);
             int frameEpoch = ReadInt32(frame, 8);
@@ -578,6 +641,20 @@ namespace UdonSharp
         {
             if (!Utilities.IsValid(player) || !Utilities.IsValid(Networking.LocalPlayer))
                 return;
+            for (int i = 0; i < zones.Length; i++)
+            {
+                LCGNetworkZone zone = zones[i];
+                if (zone == null)
+                    continue;
+                if (zone.Contains(player))
+                    RequestZoneSnapshot(zone.ZoneId, player);
+                if (zone.Contains(Networking.LocalPlayer) && (player.isLocal || zone.Contains(player)))
+                {
+                    if (!player.isLocal)
+                        RequestZoneSnapshot(zone.ZoneId, Networking.LocalPlayer);
+                    zone.RequestLocalSnapshotRecovery();
+                }
+            }
             for (int receiverId = 0; receiverId < receivers.Length; receiverId++)
             {
                 if (!IsPlayerObjectReceiver(receiverId) || !HasFieldRegistration(receiverId))
@@ -608,6 +685,12 @@ namespace UdonSharp
         public override void OnPlayerLeft(VRCPlayerApi player)
         {
             int removedPlayerId = player.playerId;
+            for (int i = 0; i < motionSlotCount; i++)
+            {
+                byte[] motion = (byte[])pendingMotionFrames[i];
+                if (motion != null && (pendingMotionPlayers[i] == player || ReadInt32(motion, 24) == removedPlayerId))
+                    ClearMotion(i);
+            }
             // Clear clone-specific suppression and queued work before a player ID
             // can be reused. Null method slots are safely consumed by the FIFO.
             for (int i = sentFieldCount - 1; i >= 0; i--)
@@ -682,6 +765,195 @@ namespace UdonSharp
             receiveSequences = nextSequences;
         }
 
+        private void QueueObjectMotion(byte[] frame, int zoneId, int targetMode, VRCPlayerApi player)
+        {
+            if (targetMode == -1)
+                QueueMotionRecipient(player, frame);
+            else if ((NetworkEventTarget)targetMode == NetworkEventTarget.Self)
+                SendFrame(Networking.LocalPlayer, frame);
+            else if ((NetworkEventTarget)targetMode == NetworkEventTarget.Owner)
+            {
+                UdonBehaviour receiver = ResolveReceiver(ReadInt32(frame, 12), ReadInt32(frame, 24));
+                if (receiver != null)
+                    QueueMotionRecipient(Networking.GetOwner(receiver.gameObject), frame);
+            }
+            else
+            {
+                // Membership arrays are maintained by trigger events. Avoid a
+                // new world-wide player array and clone lookup for every sample.
+                LCGNetworkZone zone = FindZone(zoneId);
+                if (zone == null)
+                    return;
+                int count = zone.OccupantCount;
+                for (int i = 0; i < count; i++)
+                {
+                    VRCPlayerApi recipient = zone.GetOccupant(i);
+                    if (Utilities.IsValid(recipient) &&
+                        ((NetworkEventTarget)targetMode == NetworkEventTarget.All || !recipient.isLocal))
+                        QueueMotionRecipient(recipient, frame);
+                }
+            }
+            ScheduleMotionFlush();
+        }
+
+        private bool QueueMotionRecipient(VRCPlayerApi player, byte[] frame)
+        {
+            if (!Utilities.IsValid(player))
+                return false;
+            if (player.isLocal)
+                return SendFrame(player, frame);
+            int receiverId = ReadInt32(frame, 12);
+            int ownerId = ReadInt32(frame, 24);
+            int free = -1;
+            for (int i = 0; i < motionSlotCount; i++)
+            {
+                byte[] previous = (byte[])pendingMotionFrames[i];
+                if (previous == null)
+                {
+                    if (free < 0) free = i;
+                    continue;
+                }
+                if (pendingMotionPlayers[i] != player || ReadInt32(previous, 12) != receiverId ||
+                    ReadInt32(previous, 24) != ownerId)
+                    continue;
+                // A teleport/re-entry snap must survive replacement by a newer
+                // sample. Copy only when preserving that flag so other recipients
+                // never inherit a discontinuity intended for this recipient.
+                if (previous[previous.Length - 1] != 0 && frame[frame.Length - 1] == 0)
+                {
+                    byte[] replacement = new byte[frame.Length];
+                    Buffer.BlockCopy(frame, 0, replacement, 0, frame.Length);
+                    replacement[replacement.Length - 1] = 1;
+                    frame = replacement;
+                }
+                pendingMotionFrames[i] = frame;
+                pendingMotionTimes[i] = Time.realtimeSinceStartup;
+                return true;
+            }
+            if (free < 0)
+            {
+                if (motionSlotCount >= MaxPendingMotionPackets)
+                    return false;
+                free = motionSlotCount++;
+            }
+            pendingMotionFrames[free] = frame;
+            pendingMotionPlayers[free] = player;
+            pendingMotionTimes[free] = Time.realtimeSinceStartup;
+            pendingMotionCount++;
+            return true;
+        }
+
+        private void ScheduleMotionFlush()
+        {
+            if (motionFlushScheduled || pendingMotionCount == 0)
+                return;
+            motionFlushScheduled = true;
+            SendCustomEventDelayedSeconds(nameof(__lcgFlushMotion), 0.025f);
+        }
+
+        private void ClearMotion(int index)
+        {
+            if (pendingMotionFrames[index] == null)
+                return;
+            pendingMotionFrames[index] = null;
+            pendingMotionPlayers[index] = null;
+            pendingMotionCount--;
+        }
+
+        public void __lcgFlushMotion()
+        {
+            motionFlushScheduled = false;
+            float now = Time.realtimeSinceStartup;
+            if (now < nextMotionSendTime || Networking.IsClogged || NetworkCalling.GetAllQueuedEvents() > 8)
+            {
+                ScheduleMotionFlush();
+                return;
+            }
+            // Round-robin recipients prevent one busy object/player from
+            // monopolizing the transport. New samples replace unsent old ones.
+            int first = -1;
+            for (int i = 0; i < motionSlotCount; i++)
+            {
+                int slot = (motionCursor + i) % motionSlotCount;
+                byte[] frame = (byte[])pendingMotionFrames[slot];
+                if (frame == null)
+                    continue;
+                VRCPlayerApi recipient = pendingMotionPlayers[slot];
+                int zoneId = ReadInt32(frame, 4);
+                UdonBehaviour receiver = ResolveReceiver(ReadInt32(frame, 12), ReadInt32(frame, 24));
+                if (!Utilities.IsValid(recipient) || receiver == null || !Networking.IsOwner(receiver.gameObject) ||
+                    !IsZoneMember(zoneId, recipient) || !IsZoneMember(zoneId, Networking.LocalPlayer))
+                {
+                    ClearMotion(slot);
+                    continue;
+                }
+                first = slot;
+                break;
+            }
+            if (first < 0)
+                return;
+            VRCPlayerApi player = pendingMotionPlayers[first];
+            LCGRuntimePlayer mailbox = (LCGRuntimePlayer)Networking.FindComponentInPlayerObjects(player, mailboxTemplate);
+            if (mailbox == null)
+            {
+                // Missing clones during restore must not stall everyone else.
+                // Drop only after a grace period; zone entry will request state.
+                if (now - pendingMotionTimes[first] > 2f)
+                    ClearMotion(first);
+                motionCursor = (first + 1) % motionSlotCount;
+                ScheduleMotionFlush();
+                return;
+            }
+            int[] slots = new int[MaxPacketsPerFrame];
+            int count = 0;
+            int bytes = HeaderSize;
+            for (int i = 0; i < motionSlotCount && count < MaxPacketsPerFrame; i++)
+            {
+                int slot = (first + i) % motionSlotCount;
+                byte[] frame = (byte[])pendingMotionFrames[slot];
+                if (frame == null || pendingMotionPlayers[slot] != player)
+                    continue;
+                int zoneId = ReadInt32(frame, 4);
+                UdonBehaviour receiver = ResolveReceiver(ReadInt32(frame, 12), ReadInt32(frame, 24));
+                if (receiver == null || !Networking.IsOwner(receiver.gameObject) ||
+                    !IsZoneMember(zoneId, player) || !IsZoneMember(zoneId, Networking.LocalPlayer))
+                {
+                    ClearMotion(slot);
+                    continue;
+                }
+                if (bytes + 2 + frame.Length > MaxMotionBatchBytes)
+                    continue;
+                slots[count++] = slot;
+                bytes += 2 + frame.Length;
+            }
+            if (count > 0)
+            {
+                byte[] batch = new byte[bytes];
+                batch[0] = ProtocolVersion;
+                batch[1] = 3;
+                int cursor = HeaderSize;
+                for (int i = 0; i < count; i++)
+                {
+                    byte[] frame = (byte[])pendingMotionFrames[slots[i]];
+                    WriteUInt16(batch, cursor, frame.Length);
+                    cursor += 2;
+                    Buffer.BlockCopy(frame, 0, batch, cursor, frame.Length);
+                    // Sequence is assigned at send time, after replacement.
+                    // Shared sample arrays remain immutable across recipients.
+                    WriteInt32(batch, cursor + 16, sequence++);
+                    cursor += frame.Length;
+                    ClearMotion(slots[i]);
+                }
+                mailbox.SendCustomNetworkEvent(NetworkEventTarget.Owner, nameof(LCGRuntimePlayer.ReceiveFrame), batch);
+                motionBatchesSent++;
+                lastMotionBatchBytes = bytes;
+                // Leave room for gameplay RPCs; cap both event rate and bytes.
+                nextMotionSendTime = now + Mathf.Max(0.025f, (bytes + 64f) / 6000f);
+            }
+            motionCursor = (first + 1) % motionSlotCount;
+            ScheduleMotionFlush();
+        }
+
         private LCGNetworkZone FindZone(int zoneId)
         {
             for (int i = 0; i < zones.Length; i++)
@@ -696,7 +968,7 @@ namespace UdonSharp
         private static bool ValidateFrame(byte[] frame)
         {
             return frame != null && frame.Length >= HeaderSize && frame.Length <= MaxFrameBytes &&
-                   frame[0] == ProtocolVersion && frame[1] <= 2;
+                   frame[0] == ProtocolVersion && frame[1] <= 3;
         }
 
         internal static int ReadInt32(byte[] data, int offset)

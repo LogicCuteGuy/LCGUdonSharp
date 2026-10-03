@@ -21,10 +21,21 @@ namespace UdonSharp
 
         private VRCPlayerApi[] occupants = new VRCPlayerApi[0];
         private double[] enteredAt = new double[0];
+        private int ownershipRepairAttempts;
+        private bool ownershipRepairScheduled;
+        private int snapshotAttempts;
+        private bool snapshotScheduled;
+        private float snapshotRetryDelay;
 
         public int ZoneId => zoneId;
         public int Epoch => epoch;
         public LCGZoneExitMode ExitMode => exitMode;
+        public int OccupantCount => occupants.Length;
+
+        public VRCPlayerApi GetOccupant(int index)
+        {
+            return index >= 0 && index < occupants.Length ? occupants[index] : null;
+        }
 
         internal void Configure(int id, LCGRuntime sceneRuntime, GameObject[] ownedObjects,
             GameObject[] controlledObjects)
@@ -42,14 +53,17 @@ namespace UdonSharp
 
             AddOccupant(player);
             epoch++;
-            if (occupants.Length == 1)
-                TransferProtectedOwnership(player);
+            // Only the existing object's owner hands it to the first entrant.
+            // Other clients must not race to SetOwner from their trigger view.
+            RequestOwnershipRepair();
             if (player.isLocal && exitMode == LCGZoneExitMode.DisableChildren)
                 SetExitControlledObjectsActive(true);
             // Each client can observe entry at a different time. The entrant asks
             // for a snapshot, and owners also push one when they observe entry.
             if (runtime != null)
                 runtime.RequestZoneSnapshot(zoneId, player);
+            if (player.isLocal)
+                RequestLocalSnapshotRecovery();
         }
 
         public override void OnPlayerTriggerExit(VRCPlayerApi player)
@@ -62,21 +76,95 @@ namespace UdonSharp
             RemoveOccupant(index);
             epoch++;
 
-            if (wasProtectedOwner && occupants.Length > 0)
+            if (player.isLocal && wasProtectedOwner && occupants.Length > 0)
                 TransferOwnedObjects(player, GetLongestPresentOccupant());
 
             if (player.isLocal)
+            {
+                snapshotAttempts = 0;
                 ApplyExitMode();
+            }
         }
 
         public override void OnPlayerLeft(VRCPlayerApi player)
         {
             OnPlayerTriggerExit(player);
+            // VRChat already reassigns disconnected owners. Only the newly
+            // assigned owner may repair an assignment outside this zone.
+            RequestOwnershipRepair();
+        }
+
+        public override void OnOwnershipTransferred(VRCPlayerApi player)
+        {
+            if (Utilities.IsValid(player) && player.isLocal)
+                RequestOwnershipRepair();
+        }
+
+        public void RequestOwnershipRepair()
+        {
+            if (GetLongestPresentOccupant() == null)
+                return;
+            TransferProtectedOwnership(GetLongestPresentOccupant());
+            // OnPlayerLeft may precede the automatic ownership assignment.
+            // Ownership callbacks also restart this finite recovery window.
+            ownershipRepairAttempts = 8;
+            if (!ownershipRepairScheduled)
+            {
+                ownershipRepairScheduled = true;
+                SendCustomEventDelayedSeconds(nameof(__lcgRepairOwnership), 0.25f);
+            }
+        }
+
+        public void __lcgRepairOwnership()
+        {
+            ownershipRepairScheduled = false;
+            if (ownershipRepairAttempts <= 0)
+                return;
+            ownershipRepairAttempts--;
+            TransferProtectedOwnership(GetLongestPresentOccupant());
+            if (ownershipRepairAttempts > 0 && GetLongestPresentOccupant() != null)
+            {
+                ownershipRepairScheduled = true;
+                SendCustomEventDelayedSeconds(nameof(__lcgRepairOwnership), 0.25f);
+            }
+        }
+
+        public void RequestLocalSnapshotRecovery()
+        {
+            if (runtime == null || !Contains(Networking.LocalPlayer))
+                return;
+            // Entry can precede mailbox restore or the owner's remote trigger.
+            // Retry current state only while inside, with bounded backoff.
+            snapshotAttempts = 5;
+            snapshotRetryDelay = 0.5f;
+            if (!snapshotScheduled)
+            {
+                snapshotScheduled = true;
+                SendCustomEventDelayedSeconds(nameof(__lcgRetrySnapshot), snapshotRetryDelay);
+            }
+        }
+
+        public void __lcgRetrySnapshot()
+        {
+            snapshotScheduled = false;
+            if (snapshotAttempts <= 0 || runtime == null || !Contains(Networking.LocalPlayer))
+            {
+                snapshotAttempts = 0;
+                return;
+            }
+            snapshotAttempts--;
+            runtime.RequestZoneSnapshot(zoneId, Networking.LocalPlayer);
+            if (snapshotAttempts > 0)
+            {
+                snapshotRetryDelay = Mathf.Min(snapshotRetryDelay * 2f, 4f);
+                snapshotScheduled = true;
+                SendCustomEventDelayedSeconds(nameof(__lcgRetrySnapshot), snapshotRetryDelay);
+            }
         }
 
         public bool Contains(VRCPlayerApi player)
         {
-            return IndexOf(player) >= 0;
+            return Utilities.IsValid(player) && IndexOf(player) >= 0;
         }
 
         public bool CanTakeOwnership(VRCPlayerApi requestingPlayer)
@@ -140,11 +228,21 @@ namespace UdonSharp
 
         private int IndexOf(VRCPlayerApi player)
         {
-            if (!Utilities.IsValid(player))
+            // A departing player's API can already be invalid in OnPlayerLeft.
+            // Its ID still identifies the membership entry that must be removed.
+            if (player == null)
                 return -1;
             for (int i = 0; i < occupants.Length; i++)
             {
-                if (Utilities.IsValid(occupants[i]) && occupants[i].playerId == player.playerId)
+                if (occupants[i] == player)
+                    return i;
+            }
+            int playerId = player.playerId;
+            if (playerId < 0)
+                return -1;
+            for (int i = 0; i < occupants.Length; i++)
+            {
+                if (occupants[i] != null && occupants[i].playerId == playerId)
                     return i;
             }
 
@@ -153,15 +251,17 @@ namespace UdonSharp
 
         private VRCPlayerApi GetLongestPresentOccupant()
         {
-            int best = 0;
-            for (int i = 1; i < occupants.Length; i++)
+            int best = -1;
+            for (int i = 0; i < occupants.Length; i++)
             {
-                if (enteredAt[i] < enteredAt[best] ||
+                if (!Utilities.IsValid(occupants[i]))
+                    continue;
+                if (best < 0 || enteredAt[i] < enteredAt[best] ||
                     (enteredAt[i] == enteredAt[best] && occupants[i].playerId < occupants[best].playerId))
                     best = i;
             }
 
-            return occupants[best];
+            return best >= 0 ? occupants[best] : null;
         }
 
         private bool IsProtectedOwner(VRCPlayerApi player)
@@ -177,11 +277,12 @@ namespace UdonSharp
 
         private void TransferProtectedOwnership(VRCPlayerApi player)
         {
-            if (!Utilities.IsValid(player))
+            if (!Contains(player))
                 return;
             for (int i = 0; i < protectedObjects.Length; i++)
             {
-                if (protectedObjects[i] != null)
+                if (protectedObjects[i] != null && Networking.IsOwner(protectedObjects[i]) &&
+                    !Contains(Networking.LocalPlayer))
                     Networking.SetOwner(player, protectedObjects[i]);
             }
         }

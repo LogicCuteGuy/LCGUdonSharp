@@ -359,6 +359,44 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer.Tests
             finally { CloseAfterBehaviourSetup(scene); }
         }
 
+        [Test]
+        public void PacketBindings_UseCompiledProgramWhenSourceCacheIsEmpty()
+        {
+            Scene scene = EditorSceneManager.NewPreviewScene();
+            UdonSharpProgramAsset asset = null;
+            FieldInfo programField = null;
+            object cachedProgram = null;
+            try
+            {
+                LCGNetworkZone zone = CreateZone(scene, "Packet binding zone");
+                GameObject target = CreateProtectedChild(zone.transform, "Packet receiver");
+                var receiver = UdonSharpEditorUtility.GetBackingUdonBehaviour(
+                    target.GetComponent<LCGManualObjectSync>());
+                asset = (UdonSharpProgramAsset)receiver.programSource;
+                for (Type type = asset.GetType(); type != null && programField == null; type = type.BaseType)
+                    programField = type.GetField("program", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+                Assert.That(programField, Is.Not.Null);
+                cachedProgram = programField.GetValue(asset);
+                programField.SetValue(asset, null);
+                Assert.That(asset.GetRealProgram(), Is.Null, "Reproduce an unchanged script after a domain reload.");
+                Assert.That(asset.SerializedProgramAsset.RetrieveProgram().SymbolTable.HasAddressForSymbol("__lcgRuntime"), Is.True);
+
+                CreateProcessor().OnProcessScene(scene, null);
+
+                LCGRuntime runtime = scene.GetRootGameObjects()
+                    .SelectMany(go => go.GetComponentsInChildren<LCGRuntime>(true)).Single();
+                Assert.That(GetSerializedVariable(receiver, "__lcgRuntime"),
+                    Is.SameAs(UdonSharpEditorUtility.GetBackingUdonBehaviour(runtime)));
+                Assert.That((int)GetSerializedVariable(receiver, "__lcgReceiverId"), Is.GreaterThanOrEqualTo(0));
+                Assert.That(GetSerializedVariable(receiver, "__lcgZoneId"), Is.EqualTo(zone.ZoneId));
+            }
+            finally
+            {
+                if (asset != null && programField != null) programField.SetValue(asset, cachedProgram);
+                CloseAfterBehaviourSetup(scene);
+            }
+        }
+
         private static LCGNetworkZone CreateZone(Scene scene, string name, Transform parent = null)
         {
             var target = new GameObject(name);

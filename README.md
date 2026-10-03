@@ -5,7 +5,7 @@
 [![Unity](https://img.shields.io/badge/Unity-2022.3-blue)](https://unity.com/)
 [![VRChat Worlds SDK](https://img.shields.io/badge/VRChat_Worlds_SDK-3.10.5-orange)](https://github.com/VRChat/worlds)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE.md)
-[![Package Version](https://img.shields.io/badge/version-0.3.5-informational)](package.json)
+[![Package Version](https://img.shields.io/badge/version-0.3.6-informational)](package.json)
 
 LCGUdonSharp extends the UdonSharp compiler with C# interfaces, synchronous compiler-managed `try`/`catch`, build-time `async/await` lowering, extended language constructs (`ref`/`out`, closed generics, LINQ closures, `dynamic`, `Span<T>`), and a manual packet networking layer — while keeping every modified source file inside `Packages/com.logiccuteguy.lcgudonsharp` instead of the VRChat SDK or `Assets`.
 
@@ -121,10 +121,10 @@ Udon assembly (runs in VRChat)
 
 ## Installation & Setup
 
-Install **0.3.5 or later** through VCC/ALCOM, or use the named package ZIP from
+Install **0.3.6 or later** through VCC/ALCOM, or use the named package ZIP from
 GitHub Releases. The earlier `0.3.2` distribution was packaged incorrectly and
 could leave new projects without the compiler payload. Update affected projects
-to `0.3.5`; the installer will repair the compiler after Unity refreshes.
+to `0.3.6`; the installer will repair the compiler after Unity refreshes.
 
 Do not install GitHub's automatic **Source code (zip)** archive as a Unity package.
 Installable releases place the compiler in `Payload~/UdonSharp` so only the
@@ -138,7 +138,7 @@ optional samples, imported after setup completes.
 
 ### Steps
 
-1. Refresh the LogicCuteGuy repository in VCC/ALCOM and install or update LCGUdonSharp to `0.3.5`. For a local package reference, extract the named release ZIP first and reference that extracted folder:
+1. Refresh the LogicCuteGuy repository in VCC/ALCOM and install or update LCGUdonSharp to `0.3.6`. For a local package reference, extract the named release ZIP first and reference that extracted folder:
 
    ```json
    "com.logiccuteguy.lcgudonsharp": "file:../path/to/com.logiccuteguy.lcgudonsharp"
@@ -376,6 +376,12 @@ Public `void` methods support up to eight supported arguments. Packet field writ
 
 **Network zones:** add `LCGNetworkZone` to a trigger collider to restrict descendant packet recipients and ownership to players inside the trigger. Inside zones, `VRC_ObjectSync` is replaced with a manual relay; script transforms sync on demand via `LCGNetwork.RequestObjectSync(gameObject)` (pickups sync automatically while held).
 
+Zone entry and `OnPlayerRestored` request current scene fields and object state. Local snapshot recovery makes up to five additional attempts with bounded backoff, stops on exit, and restarts after a relevant restore event. Automatic ownership reassignment after a disconnect is repaired by the newly assigned owner through ownership callbacks and a finite recovery window. Existing member ownership is preserved; if the zone is empty, VRChat's fallback owner remains until a member enters.
+
+Object motion uses a separate latest-state queue, rather than the gameplay RPC FIFO. Unsent samples of the same object/recipient are replaced, with teleport and re-entry discontinuities preserved. Multiple objects for one recipient share a mailbox event, up to 900 bytes. The motion scheduler sends at most 40 events/second and budgets approximately 6 KB/second including a conservative overhead allowance; it pauses when networking is clogged or the SDK's outgoing queue exceeds eight events. These are motion budgets, not a cap on unrelated gameplay or native Udon traffic. More recipients share this budget, so the delivered sample rate decreases as a zone fills. Remote objects interpolate samples with bounded velocity prediction; remote rigidbodies remain kinematic until ownership transfers to the local player.
+
+Ownership handoff is initiated by the current object owner. The guard allows that owner to hand off after leaving the zone while continuing to reject outside claimants and outside destination owners. Rebuild the world after updating: older builds do not understand the motion batch envelope. `LCGRuntime.PendingMotionCount`, `MotionBatchesSent`, and `LastMotionBatchBytes` expose local transport diagnostics. Validate crowded-world FPS and latency with multiple VRChat clients; editor tests exercise routing and queue policy, not real network throughput.
+
 Third-party behaviours that still use native `[UdonSynced]` fields remain fail-closed by default. For compatibility with an existing hierarchy, enable **Allow Native Sync Passthrough** on the zone. This keeps those behaviours working and lets the zone scope LCG packets, ownership, and converted `VRC_ObjectSync` traffic, but the native synced fields still broadcast to the whole instance and are not optimized by the zone. Continuous behaviours with no synced fields are accepted automatically.
 
 Zone colliders in **separate hierarchies may overlap** — each scene object belongs to its nearest ancestor zone. Zone colliders in the same parent/child hierarchy may **not** overlap; that configuration fails the build before helpers are generated.
@@ -508,7 +514,7 @@ LCGUdonSharp builds on [UdonSharp](https://github.com/MerlinSan/UdonSharp), orig
 
 ## Contributing
 
-Build installable releases with `python Tools~/build_release.py --output dist/com.logiccuteguy.lcgudonsharp-0.3.5.zip`.
+Build installable releases with `python Tools~/build_release.py --output dist/com.logiccuteguy.lcgudonsharp-0.3.6.zip`.
 Run `python Tools~/test_release.py` first. A raw `git archive` is not an installable
 release. The release workflow validates the package on pull requests and `main`,
 and publishes the generated ZIP and its matching `package.json` for version tags.

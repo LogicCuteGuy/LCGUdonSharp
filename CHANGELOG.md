@@ -1,5 +1,15 @@
 # LCGUdonSharp Changelog
 
+## 0.3.6 - 2026-10-04
+
+- Coalesce unsent object motion per object/recipient and batch mailbox delivery with bounded event/byte budgets and congestion backoff. Remote motion interpolates with bounded prediction and restores physics on ownership takeover.
+- Recover zone scene-field and object snapshots after player restore and late entry, with bounded retries that stop on exit.
+- Repair disconnect ownership reassignment to an outside player through ownership callbacks and a finite recovery window. Preserve valid member ownership; empty zones retain the VRChat fallback owner until a member enters.
+- Match departing players by identity before falling back to player IDs, including invalid-ID collisions.
+- Bind packet receivers from their serialized compiled programs when a domain reload clears the source program cache.
+- Add wired native/LCG lamp and moving-cube examples, high-bandwidth load-generator prefabs, scene placement, and Thai setup guidance.
+- Add regression coverage for crowd motion, snapshots, ownership callback ordering, and scene bindings. Rebuild worlds after updating; older builds cannot decode the motion batch envelope.
+
 ## 0.3.5 - 2026-09-28
 
 - Allow Continuous Udon behaviours without synced fields inside `LCGNetworkZone`.

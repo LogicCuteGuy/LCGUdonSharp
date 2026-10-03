@@ -35,6 +35,26 @@ namespace UdonSharp
         private bool pickupMotionActive;
         private bool pickupHeld;
         private float nextPickupSyncTime;
+        private Rigidbody cachedBody;
+        private bool remoteStateActive;
+        private bool hasRemotePhysics;
+        private Vector3 interpolationStartPosition;
+        private Quaternion interpolationStartRotation;
+        private Vector3 targetPosition;
+        private Quaternion targetRotation;
+        private Vector3 targetVelocity;
+        private Vector3 targetAngularVelocity;
+        private bool targetUseGravity;
+        private bool targetIsKinematic;
+        private float receivedAt;
+        private float interpolationDuration = 0.1f;
+
+        private Rigidbody GetBody()
+        {
+            if (cachedBody == null)
+                cachedBody = GetComponent<Rigidbody>();
+            return cachedBody;
+        }
 
         public override void OnPickup()
         {
@@ -57,6 +77,19 @@ namespace UdonSharp
 
         private void LateUpdate()
         {
+            if (remoteStateActive && !Networking.IsOwner(gameObject))
+            {
+                if (zone == null || !zone.Contains(Networking.LocalPlayer))
+                    return;
+                float elapsed = Time.realtimeSinceStartup - receivedAt;
+                float t = Mathf.Clamp01(elapsed / interpolationDuration);
+                // Bounded prediction bridges lower crowd-adaptive sample rates
+                // without letting a missing sender move the object forever.
+                Vector3 prediction = targetVelocity * Mathf.Clamp(elapsed - interpolationDuration, 0f, 0.15f);
+                transform.SetPositionAndRotation(Vector3.Lerp(interpolationStartPosition, targetPosition, t) + prediction,
+                    Quaternion.Slerp(interpolationStartRotation, targetRotation, t));
+                return;
+            }
             if (!pickupMotionActive)
                 return;
             if (!Networking.IsOwner(gameObject))
@@ -70,7 +103,7 @@ namespace UdonSharp
 
             nextPickupSyncTime = Time.time + 0.1f;
             RequestObjectSync();
-            Rigidbody body = GetComponent<Rigidbody>();
+            Rigidbody body = GetBody();
             if (!pickupHeld && (body == null || body.isKinematic || body.IsSleeping()))
                 pickupMotionActive = false;
         }
@@ -122,32 +155,63 @@ namespace UdonSharp
         public void ApplyObjectState(Vector3 position, Quaternion rotation, Vector3 velocity,
             Vector3 angularVelocity, bool useGravity, bool isKinematic, bool discontinuity)
         {
-            Rigidbody body = GetComponent<Rigidbody>();
-            if (discontinuity)
+            Rigidbody body = GetBody();
+            float now = Time.realtimeSinceStartup;
+            interpolationDuration = remoteStateActive ? Mathf.Clamp(now - receivedAt, 0.05f, 0.35f) : 0.1f;
+            receivedAt = now;
+            bool snap = discontinuity || !remoteStateActive;
+            targetPosition = position;
+            targetRotation = rotation;
+            targetVelocity = velocity;
+            targetAngularVelocity = angularVelocity;
+            targetUseGravity = useGravity;
+            targetIsKinematic = isKinematic;
+            interpolationStartPosition = snap ? position : transform.position;
+            interpolationStartRotation = snap ? rotation : transform.rotation;
+            remoteStateActive = !Networking.IsOwner(gameObject);
+            hasRemotePhysics = remoteStateActive;
+            if (snap)
                 transform.SetPositionAndRotation(position, rotation);
-            else
-            {
-                transform.position = position;
-                transform.rotation = rotation;
-            }
 
             if (body == null)
                 return;
-            body.velocity = velocity;
-            body.angularVelocity = angularVelocity;
             body.useGravity = useGravity;
-            body.isKinematic = isKinematic;
+            // Remote physics must not fight the interpolated authoritative pose.
+            body.isKinematic = remoteStateActive || isKinematic;
+            if (!body.isKinematic)
+            {
+                body.velocity = velocity;
+                body.angularVelocity = angularVelocity;
+            }
         }
 
         public override void OnOwnershipTransferred(VRCPlayerApi player)
         {
             if (Utilities.IsValid(player) && player.isLocal && zone != null && zone.Contains(player))
+            {
+                Rigidbody body = GetBody();
+                if (remoteStateActive)
+                    transform.SetPositionAndRotation(targetPosition, targetRotation);
+                if (hasRemotePhysics && body != null)
+                {
+                    body.isKinematic = targetIsKinematic;
+                    body.useGravity = targetUseGravity;
+                    if (!body.isKinematic)
+                    {
+                        body.velocity = targetVelocity;
+                        body.angularVelocity = targetAngularVelocity;
+                    }
+                }
+                remoteStateActive = false;
+                hasRemotePhysics = false;
+                pickupMotionActive = body != null && !body.isKinematic;
                 SendState(NetworkEventTarget.Others, null, true);
+            }
         }
 
         private void SendState(NetworkEventTarget target, VRCPlayerApi player, bool discontinuity)
         {
-            Rigidbody body = GetComponent<Rigidbody>();
+            Rigidbody body = GetBody();
             Vector3 velocity = body != null ? body.velocity : Vector3.zero;
             Vector3 angularVelocity = body != null ? body.angularVelocity : Vector3.zero;
             bool useGravity = body != null && body.useGravity;
@@ -162,10 +226,15 @@ namespace UdonSharp
 
         internal void RestoreDefaults()
         {
+            remoteStateActive = false;
             transform.localPosition = defaultPosition;
             transform.localRotation = defaultRotation;
+            targetPosition = transform.position;
+            targetRotation = transform.rotation;
+            targetVelocity = Vector3.zero;
+            targetAngularVelocity = Vector3.zero;
             gameObject.SetActive(defaultActive);
-            Rigidbody body = GetComponent<Rigidbody>();
+            Rigidbody body = GetBody();
             if (body != null)
             {
                 body.velocity = Vector3.zero;
