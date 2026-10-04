@@ -1,5 +1,11 @@
 # LCGUdonSharp Changelog
 
+## 0.3.7 - 2026-10-04
+
+- Bake ordinary custom ScriptableObject assets into read-only Udon data snapshots, with typed field reads, asset arrays, inherited serialized fields and defensive copies of array data.
+- Preserve Inspector asset assignments when reading back the Udon heap. Keep native SDK ScriptableObject types on their existing Udon path.
+- Add shop data assets, an interactive prefab in `TestLCGUdonSharp.unity`, a usage guide and serializer/compiler/Udon VM regression tests.
+
 ## 0.3.6 - 2026-10-04
 
 - Coalesce unsent object motion per object/recipient and batch mailbox delivery with bounded event/byte budgets and congestion backoff. Remote motion interpolates with bounded prediction and restores physics on ownership takeover.

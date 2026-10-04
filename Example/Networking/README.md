@@ -1,6 +1,6 @@
 # LCG Manual Packet Networking Examples
 
-> Documentation version: **0.3.6** · [All examples](../README.md) · [Package guide](../../README.md)
+> Documentation version: **0.3.7** · [All examples](../README.md) · [Package guide](../../README.md)
 
 These examples demonstrate native VRChat networking and the `[LCGPacket]` attribute system for
 manual networked state and method delivery inside an `LCGNetworkZone`.

@@ -450,6 +450,10 @@ namespace UdonSharp.Compiler.Binder
         public static BoundInvocationExpression CreateBoundInvocation(AbstractPhaseContext context, SyntaxNode node,
             MethodSymbol symbol, BoundExpression instanceExpression, BoundExpression[] parameterExpressions)
         {
+            if (symbol.RoslynSymbol != null && ((symbol.ContainingType?.IsScriptableObjectData ?? false) ||
+                (instanceExpression?.ValueType?.IsScriptableObjectData ?? false) ||
+                (symbol.ContainingType?.RoslynSymbol?.ToDisplayString() == typeof(ScriptableObject).FullName && symbol.Name == "CreateInstance")))
+                throw new CompilerException("ScriptableObject snapshots support serialized fields only; methods and runtime creation are not supported.", node?.GetLocation());
             if (TryCreateLCGObjectSyncInvocation(context, node, symbol, parameterExpressions,
                     out var objectSyncInvocation))
                 return objectSyncInvocation;

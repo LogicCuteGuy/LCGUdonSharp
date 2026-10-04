@@ -158,7 +158,8 @@ namespace UdonSharp.Compiler.Symbols
                         constructorArg.Type.TypeKind == TypeKind.Enum)
                     {
                         TypeSymbol typeSymbol = context.GetTypeSymbol(constructorArg.Type);
-                        attribValue = Enum.ToObject(typeSymbol.UdonType.SystemType, constructorArg.Value);
+                        typeSymbol.TryGetSystemType(out Type enumSystemType);
+                        attribValue = Enum.ToObject(enumSystemType, constructorArg.Value);
                     }
                     else if (constructorArg.Value is ITypeSymbol typeSymbol)
                     {
@@ -186,7 +187,8 @@ namespace UdonSharp.Compiler.Symbols
                                 if (namedArgument.Value.Type?.TypeKind == TypeKind.Enum)
                                 {
                                     TypeSymbol enumType = context.GetTypeSymbol(namedArgument.Value.Type);
-                                    value = Enum.ToObject(enumType.UdonType.SystemType, value);
+                                    enumType.TryGetSystemType(out Type enumSystemType);
+                                    value = Enum.ToObject(enumSystemType, value);
                                 }
 
                                 PropertyInfo property = instance.GetType().GetProperty(namedArgument.Key,

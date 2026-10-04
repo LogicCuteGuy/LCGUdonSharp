@@ -22,6 +22,9 @@ namespace UdonSharp.Compiler.Binder
         {
             if (fieldSymbol.IsConst)
                 return new BoundConstantExpression(fieldSymbol.RoslynSymbol.ConstantValue, fieldSymbol.Type);
+
+            if (fieldSymbol.ContainingType.IsScriptableObjectData)
+                return new BoundScriptableObjectFieldAccessExpression(context, node, fieldSymbol, sourceExpression);
             
             if (fieldSymbol is ExternFieldSymbol externField)
             {

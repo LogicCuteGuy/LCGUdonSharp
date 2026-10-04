@@ -15,6 +15,7 @@ namespace UdonSharp.Serialization
         // Serializers that will be checked against the type, this list is ordered specifically based on priority, do not arbitrarily reorder it
         private static readonly List<Serializer> _typeCheckSerializers = new List<Serializer>()
         {
+            new ScriptableObjectDataSerializer<UnityEngine.ScriptableObject>(null),
             new JaggedArraySerializer<object>(null), 
             new ArraySerializer<object>(null),
             new CollectionSerializer<object>(null),

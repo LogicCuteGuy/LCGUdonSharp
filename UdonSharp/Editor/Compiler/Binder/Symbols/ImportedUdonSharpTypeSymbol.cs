@@ -31,6 +31,9 @@ namespace UdonSharp.Compiler.Symbols
 
         protected override Symbol CreateSymbol(ISymbol roslynSymbol, AbstractPhaseContext context)
         {
+            if (IsScriptableObjectData && roslynSymbol is IPropertySymbol)
+                throw new CompilerException("ScriptableObject snapshots support serialized fields only; properties are not supported.",
+                    context.CurrentNode?.GetLocation());
             switch (roslynSymbol)
             {
                 case null:

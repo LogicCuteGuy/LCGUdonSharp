@@ -62,6 +62,12 @@ namespace UdonSharp.Compiler.Binder
 
         public static bool IsExternType(this ITypeSymbol typeSymbol)
         {
+            if (typeSymbol is INamedTypeSymbol named && named.IsScriptableObjectData())
+                return false;
+            if (typeSymbol.TypeKind == TypeKind.Enum &&
+                TypeSymbol.TryGetSystemType(typeSymbol, out var enumType) &&
+                !Udon.CompilerUdonInterface.IsExternType(enumType))
+                return false;
             // This compiler-owned enum is in runtime metadata, but is not an
             // exposed Udon type. Use normal user-enum lowering to integer storage.
             if (typeSymbol.TypeKind == TypeKind.Enum &&
@@ -86,5 +92,20 @@ namespace UdonSharp.Compiler.Binder
 
             return false;
         }
+
+        public static bool IsScriptableObjectData(this ITypeSymbol typeSymbol)
+        {
+            if (!(typeSymbol is INamedTypeSymbol named)) return false;
+            bool scriptable = false;
+            for (var current = named; current != null; current = current.BaseType)
+            {
+                scriptable |= current.ToDisplayString() == typeof(UnityEngine.ScriptableObject).FullName;
+            }
+            return scriptable && TypeSymbol.TryGetSystemType(named, out var type) &&
+                Serialization.ScriptableObjectDataLayout.IsDataType(type);
+        }
+
+        public static bool IsScriptableObjectDataOrArray(this ITypeSymbol typeSymbol) =>
+            typeSymbol.IsScriptableObjectData() || (typeSymbol is IArrayTypeSymbol array && array.ElementType.IsScriptableObjectData());
     }
 }

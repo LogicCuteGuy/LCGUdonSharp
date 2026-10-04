@@ -234,6 +234,11 @@ namespace UdonSharp.Compiler.Udon
             if (type == typeof(UdonExceptionKind))
                 return false;
 
+            // Data assets can come from ordinary C# assemblies. Their enums still
+            // need numeric storage unless the VM actually exposes the enum type.
+            if (type.IsEnum && !IsExposedToUdon("Type_" + GetUdonTypeName(type)))
+                return false;
+
             AssemblyCacheInit();
             return ExternAssemblySet.Contains(type.Assembly);
         }

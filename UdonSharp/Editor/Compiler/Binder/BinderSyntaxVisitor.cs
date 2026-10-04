@@ -1007,6 +1007,22 @@ namespace UdonSharp.Compiler.Binder
         
         public override BoundNode VisitBinaryExpression(BinaryExpressionSyntax node)
         {
+            if ((node.Kind() == SyntaxKind.EqualsExpression || node.Kind() == SyntaxKind.NotEqualsExpression) &&
+                (SymbolLookupModel.GetTypeInfo(node.Left).Type.IsScriptableObjectDataOrArray() ||
+                 SymbolLookupModel.GetTypeInfo(node.Right).Type.IsScriptableObjectDataOrArray()))
+            {
+                var objectType = Context.GetTypeSymbol(SpecialType.System_Object);
+                var equals = new ExternSynthesizedMethodSymbol(Context,
+                    "SystemObject.__Equals__SystemObject_SystemObject__SystemBoolean",
+                    new[] { objectType, objectType }, Context.GetTypeSymbol(SpecialType.System_Boolean), true);
+                BoundExpression result = BoundInvocationExpression.CreateBoundInvocation(Context, node, equals, null,
+                    new[] { VisitExpression(node.Left), VisitExpression(node.Right) });
+                if (node.Kind() == SyntaxKind.NotEqualsExpression)
+                    result = new BoundExternInvocation(node, Context,
+                        new ExternSynthesizedOperatorSymbol(BuiltinOperatorType.UnaryNegation,
+                            Context.GetTypeSymbol(SpecialType.System_Boolean), Context), null, new[] { result });
+                return result;
+            }
             if (node.Kind() == SyntaxKind.LogicalOrExpression ||
                 node.Kind() == SyntaxKind.LogicalAndExpression)
                 return HandleShortCircuitOperator(node);

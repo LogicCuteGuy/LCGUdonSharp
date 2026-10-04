@@ -1,6 +1,6 @@
 # LCGUdonSharp examples
 
-> Documentation version: **0.3.6** · [Package guide](../README.md)
+> Documentation version: **0.3.7** · [Package guide](../README.md)
 
 Runnable UdonSharp behaviours for the LCGUdonSharp 0.3.x feature set. Open **`TestLCGUdonSharp.unity`** to get a scene with the networking showcases wired up, or add any example component to a GameObject in your own scene.
 
@@ -15,6 +15,10 @@ Runnable UdonSharp behaviours for the LCGUdonSharp 0.3.x feature set. Open **`Te
 | [`GenericRestrictions/`](GenericRestrictions/README.md) | Normal C# collections plus rejected generic/hierarchy shapes | `OpenGenericsExample`, `GenericBehavioursExample`, `GenericHeapObjectsExample`, `ListTypesExample`, `InterfaceMembersExample`, `MultipleConcreteBasesExample` | [Collections and restrictions guide](GenericRestrictions/README.md) |
 
 Root-level files:
+
+The [ScriptableObject shop](ScriptableObjects/README.md) demonstrates ordinary
+data assets, typed field reads, an asset catalog, and local purchases. Its wired
+prefab is included in `TestLCGUdonSharp.unity`.
 
 | File | What it is |
 |------|------------|

@@ -147,6 +147,8 @@ namespace UdonSharp.Compiler.Binder
 
         public static BoundAccessExpression BindPropertyAccess(AbstractPhaseContext context, SyntaxNode node, PropertySymbol propertySymbol, BoundExpression sourceExpression, BoundExpression[] parameterExpressions = null)
         {
+            if ((propertySymbol.ContainingType?.IsScriptableObjectData ?? false) || (sourceExpression?.ValueType?.IsScriptableObjectData ?? false))
+                throw new UdonSharp.Core.CompilerException("ScriptableObject snapshots support serialized fields only; properties and Unity object APIs are not supported.", node?.GetLocation());
             if (propertySymbol is ExternPropertySymbol externProperty)
             {
                 Type propertyType = externProperty.ContainingType.UdonType.SystemType;

@@ -35,7 +35,8 @@ namespace UdonSharp.Compiler.Symbols
                 {
                     DefaultValue = (IConstantValue) Activator.CreateInstance(
                         typeof(ConstantValue<>).MakeGenericType(Type.UdonType.SystemType),
-                        Enum.ToObject(Type.UdonType.SystemType, RoslynSymbol.ExplicitDefaultValue));
+                        Type.IsExtern ? Enum.ToObject(Type.UdonType.SystemType, RoslynSymbol.ExplicitDefaultValue) :
+                            Convert.ChangeType(RoslynSymbol.ExplicitDefaultValue, Type.UdonType.SystemType));
                 }
                 else
                 {

@@ -84,6 +84,13 @@ namespace UdonSharp.Compiler.Symbols
             if (IsBound)
                 return;
 
+            if (ContainingType.IsScriptableObjectData)
+            {
+                SetupAttributes(context);
+                _resolved = true;
+                return;
+            }
+
             // Metadata enum constants already carry their type and value.
             // There is no source initializer to visit.
             if (ContainingType.IsEnum && IsConst && RoslynSymbol.DeclaringSyntaxReferences.IsEmpty)
@@ -104,6 +111,9 @@ namespace UdonSharp.Compiler.Symbols
             CheckHiddenFields(context);
             
             SetupAttributes(context);
+
+            if (IsSynced && (Type.IsScriptableObjectData || (Type.IsArray && Type.ElementType.IsScriptableObjectData)))
+                throw new UdonSharp.Core.CompilerException("ScriptableObject data snapshots cannot use [UdonSynced]. Sync gameplay state separately.");
             
             // Re-get the type symbol to register it as a dependency in the bind context
             TypeSymbol fieldType = context.GetTypeSymbol(RoslynSymbol.Type);

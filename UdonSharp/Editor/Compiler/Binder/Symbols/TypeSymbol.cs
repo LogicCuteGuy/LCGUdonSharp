@@ -34,6 +34,8 @@ namespace UdonSharp.Compiler.Symbols
 
         public bool IsUdonSharpInterface => !IsArray && RoslynSymbol.TypeKind == TypeKind.Interface && !IsExtern;
 
+        public bool IsScriptableObjectData => RoslynSymbol.IsScriptableObjectData();
+
         public ExternTypeSymbol UdonType { get; protected set; }
 
         private TypeSymbol _elementType;
@@ -104,7 +106,7 @@ namespace UdonSharp.Compiler.Symbols
 
             // Compiler-owned metadata enums use user-enum storage, but have no
             // source declaration or member bodies to bind.
-            if (IsArray || (IsEnum && RoslynSymbol.DeclaringSyntaxReferences.IsEmpty))
+            if (IsArray || IsScriptableObjectData || (IsEnum && RoslynSymbol.DeclaringSyntaxReferences.IsEmpty))
             {
                 _bound = true;
                 return;
