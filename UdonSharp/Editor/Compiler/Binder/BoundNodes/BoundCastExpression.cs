@@ -14,7 +14,7 @@ namespace UdonSharp.Compiler.Binder
 
         public override TypeSymbol ValueType => TargetType;
 
-        public BoundCastExpression(SyntaxNode node, BoundExpression sourceExpression, TypeSymbol targetType, bool isExplicit)
+        public BoundCastExpression(SyntaxNode node, BoundExpression sourceExpression, TypeSymbol targetType, bool isExplicit, bool isCompilerGenerated = false)
             : base(node, sourceExpression)
         {
             if (targetType is TypeParameterSymbol)
@@ -24,9 +24,10 @@ namespace UdonSharp.Compiler.Binder
                 (sourceExpression.ValueType.IsArray && sourceExpression.ValueType.ElementType.IsScriptableObjectData);
             bool targetData = targetType.IsScriptableObjectData ||
                 (targetType.IsArray && targetType.ElementType.IsScriptableObjectData);
-            if ((sourceData || targetData) && sourceExpression.ValueType != targetType &&
-                !(sourceExpression.IsConstant && sourceExpression.ConstantValue.Value == null))
-                throw new UdonSharp.Core.CompilerException("ScriptableObject data casts and polymorphic references are not supported. Keep the exact asset type.", node?.GetLocation());
+            if (!isCompilerGenerated && (sourceData || targetData) && sourceExpression.ValueType != targetType &&
+                !(sourceExpression.IsConstant && sourceExpression.ConstantValue.Value == null) &&
+                !(sourceExpression.ValueType.IsScriptableObjectData && targetType.IsScriptableObjectData))
+                throw new UdonSharp.Core.CompilerException($"ScriptableObject data casts require custom data types; casts to object/native assets and array covariance are not supported ({sourceExpression.ValueType} -> {targetType}).", node?.GetLocation());
             
             TargetType = targetType;
             IsExplicit = isExplicit;
@@ -34,6 +35,11 @@ namespace UdonSharp.Compiler.Binder
 
         public override Value EmitValue(EmitContext context)
         {
+            if (SourceExpression.ValueType.IsScriptableObjectData && TargetType.IsScriptableObjectData &&
+                !context.CompileContext.RoslynCompilation.ClassifyConversion(SourceExpression.ValueType.RoslynSymbol,
+                    TargetType.RoslynSymbol).IsImplicit)
+                return context.EmitValue(new BoundScriptableObjectTypeExpression(context, SyntaxNode,
+                    SourceExpression, TargetType, false, true));
             return context.CastValue(context.EmitValue(SourceExpression), TargetType, IsExplicit);
         }
     }

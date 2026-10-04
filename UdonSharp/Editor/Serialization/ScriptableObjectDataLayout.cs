@@ -26,17 +26,31 @@ namespace UdonSharp.Serialization
                 throw new NotSupportedException("Generic ScriptableObject data types are not supported.");
 
             var fields = new List<FieldInfo>();
+            var hierarchy = new Stack<Type>();
             for (Type current = type; current != typeof(ScriptableObject); current = current.BaseType)
+                hierarchy.Push(current);
+            foreach (Type current in hierarchy)
                 fields.AddRange(current.GetFields(BindingFlags.Instance | BindingFlags.Public |
-                    BindingFlags.NonPublic | BindingFlags.DeclaredOnly).Where(IsSerialized));
+                    BindingFlags.NonPublic | BindingFlags.DeclaredOnly).Where(IsSerialized)
+                    .OrderBy(field => field.Name, StringComparer.Ordinal));
 
             foreach (FieldInfo field in fields)
                 if (!IsSupportedFieldType(field.FieldType))
                     throw new NotSupportedException($"ScriptableObject data field '{field.DeclaringType.FullName}.{field.Name}' " +
-                        $"has unsupported type '{field.FieldType}'. Use Udon-safe values or one-dimensional arrays; nested data assets are not supported.");
+                        $"has unsupported type '{field.FieldType}'. Use Udon-safe values, custom ScriptableObjects or one-dimensional arrays.");
 
-            return fields.OrderBy(field => field.DeclaringType.FullName + "." + field.Name,
-                StringComparer.Ordinal).ToArray();
+            // Base fields must remain a prefix of every derived layout.
+            return fields.ToArray();
+        }
+
+        public static string GetTypeToken(Type type) => "|" + type.Assembly.GetName().Name + ":" + type.FullName + "|";
+
+        public static string GetTypeTag(Type type)
+        {
+            string tag = "";
+            for (Type current = type; IsDataType(current); current = current.BaseType)
+                tag += GetTypeToken(current);
+            return tag;
         }
 
         private static bool IsSerialized(FieldInfo field) => !field.IsStatic && !field.IsInitOnly &&
@@ -45,6 +59,7 @@ namespace UdonSharp.Serialization
 
         private static bool IsSupportedFieldType(Type type)
         {
+            if (IsDataType(type)) return true;
             if (type.IsArray)
                 return type.GetArrayRank() == 1 && !type.GetElementType().IsArray &&
                     IsSupportedFieldType(type.GetElementType());

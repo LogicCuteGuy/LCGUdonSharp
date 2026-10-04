@@ -382,6 +382,8 @@ namespace UdonSharp.Compiler.Binder
                     return new[] { (int)UdonExceptionKind.DivideByZero };
                 case "System.InvalidOperationException":
                     return new[] { (int)UdonExceptionKind.InvalidOperation };
+                case "System.InvalidCastException":
+                    return new[] { (int)UdonExceptionKind.InvalidCast };
                 case "System.ArgumentException":
                     return new[] { (int)UdonExceptionKind.Argument, (int)UdonExceptionKind.ArgumentNull, (int)UdonExceptionKind.ArgumentOutOfRange };
                 case "System.ArgumentNullException":
@@ -459,6 +461,7 @@ namespace UdonSharp.Compiler.Binder
                 case "System.IndexOutOfRangeException": return (int)UdonExceptionKind.IndexOutOfRange;
                 case "System.DivideByZeroException": return (int)UdonExceptionKind.DivideByZero;
                 case "System.InvalidOperationException": return (int)UdonExceptionKind.InvalidOperation;
+                case "System.InvalidCastException": return (int)UdonExceptionKind.InvalidCast;
                 case "System.ArgumentException": return (int)UdonExceptionKind.Argument;
                 case "System.ArgumentNullException": return (int)UdonExceptionKind.ArgumentNull;
                 case "System.ArgumentOutOfRangeException": return (int)UdonExceptionKind.ArgumentOutOfRange;
@@ -952,6 +955,10 @@ namespace UdonSharp.Compiler.Binder
         {
             TypeSymbol castType = GetTypeSymbol(node.Type);
 
+            if (castType.IsScriptableObjectData && SymbolLookupModel.GetTypeInfo(node.Expression).Type.IsScriptableObjectData() &&
+                !SymbolLookupModel.ClassifyConversion(node.Expression, castType.RoslynSymbol).IsImplicit && OwningSymbol is MethodSymbol method)
+                method.MarkExplicitThrow();
+
             return VisitExpression(node.Expression, castType, true);
         }
 
@@ -1007,6 +1014,11 @@ namespace UdonSharp.Compiler.Binder
         
         public override BoundNode VisitBinaryExpression(BinaryExpressionSyntax node)
         {
+            if ((node.IsKind(SyntaxKind.IsExpression) || node.IsKind(SyntaxKind.AsExpression)) &&
+                (SymbolLookupModel.GetTypeInfo(node.Left).Type.IsScriptableObjectData() ||
+                 SymbolLookupModel.GetTypeInfo(node.Right).Type.IsScriptableObjectData()))
+                return new BoundScriptableObjectTypeExpression(Context, node, VisitExpression(node.Left),
+                    GetTypeSymbol(node.Right), node.IsKind(SyntaxKind.IsExpression));
             if ((node.Kind() == SyntaxKind.EqualsExpression || node.Kind() == SyntaxKind.NotEqualsExpression) &&
                 (SymbolLookupModel.GetTypeInfo(node.Left).Type.IsScriptableObjectDataOrArray() ||
                  SymbolLookupModel.GetTypeInfo(node.Right).Type.IsScriptableObjectDataOrArray()))
@@ -1045,6 +1057,20 @@ namespace UdonSharp.Compiler.Binder
                 return constantResult;
 
             return BoundInvocationExpression.CreateBoundInvocation(Context, node, binaryMethodSymbol, null, new[] {lhs, rhs});
+        }
+
+        public override BoundNode VisitIsPatternExpression(IsPatternExpressionSyntax node)
+        {
+            if (node.Pattern is DeclarationPatternSyntax declaration &&
+                SymbolLookupModel.GetTypeInfo(declaration.Type).Type.IsScriptableObjectData())
+            {
+                var designation = declaration.Designation is SingleVariableDesignationSyntax
+                    ? BoundAccessExpression.BindAccess(Context, declaration.Designation, GetDeclaredSymbol(declaration.Designation), null)
+                    : null;
+                return new BoundScriptableObjectTypeExpression(Context, node, VisitExpression(node.Expression),
+                    GetTypeSymbol(declaration.Type), true, designation: designation);
+            }
+            throw new CompilerException("This pattern is not supported. Use a ScriptableObject type test or declaration pattern.", node.GetLocation());
         }
 
         public override BoundNode VisitPrefixUnaryExpression(PrefixUnaryExpressionSyntax node)

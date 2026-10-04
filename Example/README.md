@@ -1,6 +1,6 @@
 # LCGUdonSharp examples
 
-> Documentation version: **0.3.7** · [Package guide](../README.md)
+> Documentation version: **0.3.8** · [Package guide](../README.md)
 
 Runnable UdonSharp behaviours for the LCGUdonSharp 0.3.x feature set. Open **`TestLCGUdonSharp.unity`** to get a scene with the networking showcases wired up, or add any example component to a GameObject in your own scene.
 
@@ -16,9 +16,10 @@ Runnable UdonSharp behaviours for the LCGUdonSharp 0.3.x feature set. Open **`Te
 
 Root-level files:
 
-The [ScriptableObject shop](ScriptableObjects/README.md) demonstrates ordinary
-data assets, typed field reads, an asset catalog, and local purchases. Its wired
-prefab is included in `TestLCGUdonSharp.unity`.
+The [ScriptableObject shop and equipment examples](ScriptableObjects/README.md)
+demonstrate typed data reads, nested economy assets, weapon/spell polymorphism,
+checked casts and local purchases. Both wired prefabs are included in
+`TestLCGUdonSharp.unity`.
 
 | File | What it is |
 |------|------------|

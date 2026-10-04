@@ -452,6 +452,8 @@ namespace UdonSharp.Compiler.Binder
         {
             if (symbol.RoslynSymbol != null && ((symbol.ContainingType?.IsScriptableObjectData ?? false) ||
                 (instanceExpression?.ValueType?.IsScriptableObjectData ?? false) ||
+                ((instanceExpression?.ValueType?.IsArray ?? false) && instanceExpression.ValueType.ElementType.IsScriptableObjectData &&
+                 symbol.Name != "get_Length" && symbol.Name != "get_LongLength" && symbol.Name != "get_Rank") ||
                 (symbol.ContainingType?.RoslynSymbol?.ToDisplayString() == typeof(ScriptableObject).FullName && symbol.Name == "CreateInstance")))
                 throw new CompilerException("ScriptableObject snapshots support serialized fields only; methods and runtime creation are not supported.", node?.GetLocation());
             if (TryCreateLCGObjectSyncInvocation(context, node, symbol, parameterExpressions,

@@ -48,7 +48,7 @@ namespace UdonSharp.Compiler.Binder
                     new[] { context.GetTypeSymbol(SpecialType.System_Int32) }, objectType, false);
                 var invocation = BoundInvocationExpression.CreateBoundInvocation(context, SyntaxNode, get,
                     BindAccess(source), new BoundExpression[] {
-                        BindAccess(context.GetConstantValue(context.GetTypeSymbol(SpecialType.System_Int32), index)) });
+                        BindAccess(context.GetConstantValue(context.GetTypeSymbol(SpecialType.System_Int32), index + 1)) });
                 var value = context.CastValue(context.EmitValue(invocation), field.Type, true);
                 if (!field.Type.IsArray) return value;
 
@@ -64,7 +64,7 @@ namespace UdonSharp.Compiler.Binder
                 var cloneCall = BoundInvocationExpression.CreateBoundInvocation(context, SyntaxNode, clone,
                     BindAccess(value), Array.Empty<BoundExpression>());
                 return context.EmitValue(new BoundConditionalExpression(null, field.Type, isNull,
-                    BindAccess(value), new BoundCastExpression(SyntaxNode, cloneCall, field.Type, true)));
+                    BindAccess(value), new BoundCastExpression(SyntaxNode, cloneCall, field.Type, true, isCompilerGenerated: true)));
             }
         }
     }

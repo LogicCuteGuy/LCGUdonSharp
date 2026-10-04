@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace UdonSharp.Serialization
@@ -32,26 +33,80 @@ namespace UdonSharp.Serialization
                 if (!UsbSerializationContext.CollectDependencies) targetObject.Value = null;
                 return;
             }
-            if (sourceObject.GetType() != typeof(T))
-                throw new NotSupportedException("Polymorphic ScriptableObject data references are not supported; use the exact asset type.");
-            var fields = ScriptableObjectDataLayout.GetFields(typeof(T));
-            var snapshot = new object[fields.Length];
+            var snapshot = ScriptableObjectSnapshot.Build(sourceObject, typeof(T));
+            if (!UsbSerializationContext.CollectDependencies) targetObject.Value = snapshot;
+        }
+    }
+
+    internal static class ScriptableObjectSnapshot
+    {
+        public static object[] Build(object source, Type declaredType) =>
+            Build(source, declaredType, new Dictionary<ScriptableObject, object[]>(), new HashSet<ScriptableObject>(),
+                new Dictionary<ScriptableObject, int>(), 0, out _);
+
+        private static object[] Build(object source, Type declaredType,
+            Dictionary<ScriptableObject, object[]> snapshots, HashSet<ScriptableObject> active,
+            Dictionary<ScriptableObject, int> heights, int depth, out int height)
+        {
+            height = 0;
+            if (source == null || (source is ScriptableObject destroyed && destroyed == null)) return null;
+            if (declaredType.IsArray)
+            {
+                var array = (Array)source;
+                var result = new object[array.Length];
+                for (int i = 0; i < result.Length; i++)
+                {
+                    result[i] = Build(array.GetValue(i), declaredType.GetElementType(), snapshots, active, heights, depth, out int childHeight);
+                    height = Math.Max(height, childHeight);
+                }
+                return result;
+            }
+            var asset = (ScriptableObject)source;
+            Type actualType = asset.GetType();
+            if (!declaredType.IsAssignableFrom(actualType) || !ScriptableObjectDataLayout.IsDataType(actualType))
+                throw new NotSupportedException($"ScriptableObject '{actualType}' is not compatible with '{declaredType}'.");
+            if (active.Contains(asset))
+                throw new NotSupportedException($"Cyclic ScriptableObject data reference at '{asset.name}' ({actualType.FullName}).");
+            if (snapshots.TryGetValue(asset, out var existing))
+            {
+                height = heights[asset];
+                if (depth + height > 128)
+                    throw new NotSupportedException("ScriptableObject data nesting exceeds 128 assets.");
+                return existing;
+            }
+            if (depth >= 128)
+                throw new NotSupportedException("ScriptableObject data nesting exceeds 128 assets.");
+            var fields = ScriptableObjectDataLayout.GetFields(actualType);
+            var snapshot = new object[fields.Length + 1];
+            snapshot[0] = ScriptableObjectDataLayout.GetTypeTag(actualType);
+            // Share repeated edges, but reject cycles before passing data to the SDK serializer.
+            snapshots.Add(asset, snapshot);
+            active.Add(asset);
+            height = 1;
             for (int i = 0; i < fields.Length; i++)
             {
-                object value = fields[i].GetValue(sourceObject);
+                object value = fields[i].GetValue(asset);
+                if (ScriptableObjectDataLayout.IsDataOrArray(fields[i].FieldType))
+                {
+                    snapshot[i + 1] = Build(value, fields[i].FieldType, snapshots, active, heights, depth + 1, out int childHeight);
+                    height = Math.Max(height, childHeight + 1);
+                    continue;
+                }
                 ValidateAssetReferences(value);
-                Serializer serializer = CreatePooled(fields[i].FieldType);
+                Serializer serializer = Serializer.CreatePooled(fields[i].FieldType);
                 IValueStorage storage = ValueStorageUtil.CreateStorage(serializer.GetUdonStorageType());
                 serializer.WriteWeak(storage, value);
-                snapshot[i] = storage.Value;
+                snapshot[i + 1] = storage.Value;
             }
-            if (!UsbSerializationContext.CollectDependencies) targetObject.Value = snapshot;
+            active.Remove(asset);
+            heights.Add(asset, height);
+            return snapshot;
         }
 
         private static void ValidateAssetReferences(object value)
         {
             if (value is ScriptableObject)
-                throw new NotSupportedException("Nested ScriptableObject references are not supported in baked data.");
+                throw new NotSupportedException("Custom data assets must use a typed ScriptableObject field, not UnityEngine.Object.");
             if (value is Array array)
                 foreach (object element in array) ValidateAssetReferences(element);
         }
@@ -72,14 +127,7 @@ namespace UdonSharp.Serialization
                 if (!UsbSerializationContext.CollectDependencies) targetObject.Value = null;
                 return;
             }
-            var snapshot = new object[sourceObject.Length];
-            var serializer = CreatePooled<T>();
-            for (int i = 0; i < sourceObject.Length; i++)
-            {
-                var storage = new SimpleValueStorage<object[]>();
-                serializer.Write(storage, in sourceObject[i]);
-                snapshot[i] = storage.Value;
-            }
+            var snapshot = ScriptableObjectSnapshot.Build(sourceObject, typeof(T[]));
             if (!UsbSerializationContext.CollectDependencies) targetObject.Value = snapshot;
         }
     }

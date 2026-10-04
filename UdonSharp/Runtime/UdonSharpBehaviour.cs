@@ -663,6 +663,7 @@ namespace UdonSharp
         NotSupported,
         KeyNotFound,
         Json,
+        InvalidCast,
     }
 
     /// <summary>

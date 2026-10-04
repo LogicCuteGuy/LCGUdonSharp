@@ -1,5 +1,12 @@
 # LCGUdonSharp Changelog
 
+## 0.3.8 - 2026-10-05
+
+- Bake nested custom ScriptableObject assets and polymorphic scalar/array references, preserving inherited field positions and checking runtime type tags for `is`, declaration patterns, `as` and explicit casts.
+- Detect cyclic/deep asset graphs with clear bake errors; preserve Inspector references and defensive copies of array fields.
+- Add weapon/spell definitions, nested economy assets and an interactive equipment example in `TestLCGUdonSharp.unity`, with serializer and Udon VM tests.
+- Rebuild all Udon programs and rebake scene/prefab data after updating; ScriptableObject snapshots now include runtime type tags and a new field layout.
+
 ## 0.3.7 - 2026-10-04
 
 - Bake ordinary custom ScriptableObject assets into read-only Udon data snapshots, with typed field reads, asset arrays, inherited serialized fields and defensive copies of array data.
