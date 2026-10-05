@@ -1,0 +1,24 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4db626ad063b13545924a9839ac5fa83, type: 3}
+  m_Name: LCG Example Assets
+  m_EditorClassIdentifier: 
+  m_SharedTableData: {fileID: 11400000, guid: 198784a8fa5a8274db57f43d4da02782, type: 2}
+  m_Tables:
+  - {fileID: 11400000, guid: 6d2e0ebb48cec9243846bef3447abab8, type: 2}
+  - {fileID: 11400000, guid: feebe2288f187434ab1040fb0ef55457, type: 2}
+  - {fileID: 11400000, guid: 0c3fc895bfa89c64f9bf126360e89dbb, type: 2}
+  m_Extensions: []
+  m_Group: Asset Table
+  references:
+    version: 2
+    RefIds: []

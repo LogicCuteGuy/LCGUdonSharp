@@ -1,6 +1,6 @@
 # ScriptableObject data
 
-> Documentation version: **0.3.8** · [All examples](../README.md) · [Package guide](../../README.md)
+> Documentation version: **0.3.9** · [All examples](../README.md) · [Package guide](../../README.md)
 
 Use ordinary Unity `ScriptableObject` classes and assets directly in UdonSharp
 fields. No extra base class, attribute, or manual copying is required:

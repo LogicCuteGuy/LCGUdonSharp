@@ -1,5 +1,12 @@
 # LCGUdonSharp Changelog
 
+## 0.3.9 - 2026-10-05
+
+- Bake Unity Localization String and Asset Tables into Udon with local language selection, regional/default fallbacks, dropdowns, and change callbacks.
+- Add validated Smart String variables, numeric formats, choose and supported plural rules, plus sprite, texture, audio, and prefab variants.
+- Add localization authoring tools, a legacy JSON workflow, and English/Thai/Japanese examples with font licenses and regression coverage.
+- Declare Unity Localization 1.4.5 and Scriptable Build Pipeline 1.21.25 dependencies, repair SDK/SBP assembly reference compatibility, and cache compiler settings before worker-thread lowering.
+
 ## 0.3.8 - 2026-10-05
 
 - Bake nested custom ScriptableObject assets and polymorphic scalar/array references, preserving inherited field positions and checking runtime type tags for `is`, declaration patterns, `as` and explicit casts.

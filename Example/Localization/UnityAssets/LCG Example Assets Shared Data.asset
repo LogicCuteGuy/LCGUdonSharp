@@ -1,0 +1,92 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5b11a58205ec3474ca216360e9fa74a8, type: 3}
+  m_Name: LCG Example Assets Shared Data
+  m_EditorClassIdentifier: 
+  m_TableCollectionName: LCG Example Assets
+  m_TableCollectionNameGuidString: 198784a8fa5a8274db57f43d4da02782
+  m_Entries:
+  - m_Id: 14817419264
+    m_Key: banner
+    m_Metadata:
+      m_Items: []
+  - m_Id: 14943248384
+    m_Key: texture
+    m_Metadata:
+      m_Items: []
+  - m_Id: 14951636992
+    m_Key: voice
+    m_Metadata:
+      m_Items: []
+  - m_Id: 15631114240
+    m_Key: object
+    m_Metadata:
+      m_Items: []
+  m_Metadata:
+    m_Items:
+    - rid: 4187812306041962529
+    - rid: 4187812306041962530
+    - rid: 4187812306041962531
+    - rid: 4187812306041962532
+  m_KeyGenerator:
+    rid: 4187812306041962528
+  references:
+    version: 2
+    RefIds:
+    - rid: 4187812306041962528
+      type: {class: DistributedUIDGenerator, ns: UnityEngine.Localization.Tables, asm: Unity.Localization}
+      data:
+        m_CustomEpoch: 1791165937187
+    - rid: 4187812306041962529
+      type: {class: AssetTypeMetadata, ns: UnityEngine.Localization.Metadata, asm: Unity.Localization}
+      data:
+        m_Entries:
+        - m_KeyId: 14817419264
+          m_TableCodes:
+          - en
+          - th
+          - ja
+        m_TypeString: UnityEngine.Sprite, UnityEngine.CoreModule, Version=0.0.0.0,
+          Culture=neutral, PublicKeyToken=null
+    - rid: 4187812306041962530
+      type: {class: AssetTypeMetadata, ns: UnityEngine.Localization.Metadata, asm: Unity.Localization}
+      data:
+        m_Entries:
+        - m_KeyId: 14943248384
+          m_TableCodes:
+          - en
+          - th
+          - ja
+        m_TypeString: UnityEngine.Texture2D, UnityEngine.CoreModule, Version=0.0.0.0,
+          Culture=neutral, PublicKeyToken=null
+    - rid: 4187812306041962531
+      type: {class: AssetTypeMetadata, ns: UnityEngine.Localization.Metadata, asm: Unity.Localization}
+      data:
+        m_Entries:
+        - m_KeyId: 14951636992
+          m_TableCodes:
+          - en
+          - th
+          - ja
+        m_TypeString: UnityEngine.AudioClip, UnityEngine.AudioModule, Version=0.0.0.0,
+          Culture=neutral, PublicKeyToken=null
+    - rid: 4187812306041962532
+      type: {class: AssetTypeMetadata, ns: UnityEngine.Localization.Metadata, asm: Unity.Localization}
+      data:
+        m_Entries:
+        - m_KeyId: 15631114240
+          m_TableCodes:
+          - en
+          - th
+          - ja
+        m_TypeString: UnityEngine.GameObject, UnityEngine.CoreModule, Version=0.0.0.0,
+          Culture=neutral, PublicKeyToken=null

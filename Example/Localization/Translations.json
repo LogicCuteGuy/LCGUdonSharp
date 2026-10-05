@@ -1,0 +1,16 @@
+{
+  "en": {
+    "hello": "Hello!",
+    "instructions": "Select a language. This changes only your own UI.",
+    "fallback": "This text falls back to English."
+  },
+  "th": {
+    "hello": "สวัสดี!",
+    "instructions": "เลือกภาษา เปลี่ยนเฉพาะหน้าจอของคุณ",
+    "fallback": ""
+  },
+  "ja": {
+    "hello": "こんにちは！",
+    "instructions": "言語を選んでください。自分の画面だけが変わります。"
+  }
+}

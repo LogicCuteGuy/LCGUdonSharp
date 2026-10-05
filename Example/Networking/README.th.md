@@ -1,6 +1,6 @@
 # ตัวอย่าง Native Network + LCG Network
 
-> Documentation version: **0.3.8** · [English guide](README.md)
+> Documentation version: **0.3.9** · [English guide](README.md)
 
 ลาก `NetworkExamples.prefab` ลง scene ที่มี VRC Scene Descriptor และพื้นสำหรับเดิน
 แล้วเข้า Play Mode หรือ Build & Test ด้วยผู้เล่นสองคน

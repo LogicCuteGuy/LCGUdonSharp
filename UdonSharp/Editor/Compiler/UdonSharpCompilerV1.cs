@@ -284,6 +284,7 @@ namespace UdonSharp.Compiler
             }
             
             Localization.Loc.InitLocalization();
+            UdonSharpSettings.GetSettings(); // Load the settings asset before worker-thread lowering.
 
             UdonSharpProgramAsset[] allPrograms = UdonSharpProgramAsset.GetAllUdonSharpPrograms();
 

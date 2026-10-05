@@ -93,7 +93,7 @@ public class <TemplateClassName> : UdonSharpBehaviour
             if (settings == null)
                 _settings = settings = CreateInstance<UdonSharpSettings>();
             
-            return settings;
+            return _settings = settings;
         }
 
         internal static UdonSharpSettings GetOrCreateSettings()

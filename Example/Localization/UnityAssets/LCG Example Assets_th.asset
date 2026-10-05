@@ -1,0 +1,39 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 97269afb30aa84742ae3f3342603618a, type: 3}
+  m_Name: LCG Example Assets_th
+  m_EditorClassIdentifier: 
+  m_LocaleId:
+    m_Code: th
+  m_SharedData: {fileID: 11400000, guid: 198784a8fa5a8274db57f43d4da02782, type: 2}
+  m_Metadata:
+    m_Items: []
+  m_TableData:
+  - m_Id: 14817419264
+    m_Localized: 6d7aae74faa5bc74db677e1759600c5e[Banner-th]
+    m_Metadata:
+      m_Items: []
+  - m_Id: 14943248384
+    m_Localized: 6d7aae74faa5bc74db677e1759600c5e
+    m_Metadata:
+      m_Items: []
+  - m_Id: 14951636992
+    m_Localized: f5424acceb69466479af5654131c32cc
+    m_Metadata:
+      m_Items: []
+  - m_Id: 15631114240
+    m_Localized: b6af22dde5e74da408cbf7e8f72c2ccb
+    m_Metadata:
+      m_Items: []
+  references:
+    version: 2
+    RefIds: []

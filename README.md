@@ -5,7 +5,7 @@
 [![Unity](https://img.shields.io/badge/Unity-2022.3-blue)](https://unity.com/)
 [![VRChat Worlds SDK](https://img.shields.io/badge/VRChat_Worlds_SDK-3.10.5-orange)](https://github.com/VRChat/worlds)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE.md)
-[![Package Version](https://img.shields.io/badge/version-0.3.8-informational)](package.json)
+[![Package Version](https://img.shields.io/badge/version-0.3.9-informational)](package.json)
 
 LCGUdonSharp extends the UdonSharp compiler with C# interfaces, synchronous compiler-managed `try`/`catch`, build-time `async/await` lowering, extended language constructs (`ref`/`out`, closed generics, LINQ closures, `dynamic`, `Span<T>`), and a manual packet networking layer — while keeping every modified source file inside `Packages/com.logiccuteguy.lcgudonsharp` instead of the VRChat SDK or `Assets`.
 
@@ -37,6 +37,7 @@ LCGUdonSharp extends the UdonSharp compiler with C# interfaces, synchronous comp
 | **Synchronous Exceptions** | Compiler-managed `try`/`catch`/`finally`, explicit throws, rethrow, and guarded null, index, and integral divide/modulo failures without relying on unavailable Udon exception opcodes. |
 | **Extended Language** | `ref`/`out` (including `out var` and recursion), closed generics, interface diamonds, LINQ lambdas with captures, proven `dynamic`, array-backed `Span<T>`. |
 | **C# Collections & JSON** | Exact `List<T>` and `Dictionary<TKey,TValue>` syntax lowered to `DataList`/`DataDictionary`, plus a VRCJson-backed `System.Text.Json` facade and manual synced-collection payloads. |
+| **Text and Asset Localization** | Unity String/Asset Tables bake into Udon. Direct manager calls, dropdowns, callbacks, Smart variables/choose/plural, sprite/texture/audio/prefab variants and fallback. See the [Unity setup](Example/Localization/UnityLocalization.md). |
 | **ScriptableObject Data** | Ordinary custom `ScriptableObject` assets, nested asset references and derived assets in base-typed fields/arrays. Read-only snapshots support typed field reads, `is`, `as` and checked casts; array reads return copies. See the [shop and equipment examples](Example/ScriptableObjects/README.md). |
 | **Manual Packet Networking** *(experimental)* | `[LCGPacket]` fields and methods with versioned frames, authority checks, replay protection, field coalescing, verified-sender callbacks, targeted PlayerObject delivery. |
 | **Network Zones** | `LCGNetworkZone` scopes packet recipients and ownership to a trigger volume; manual object-sync replaces `VRC_ObjectSync` inside zones. |
@@ -122,10 +123,10 @@ Udon assembly (runs in VRChat)
 
 ## Installation & Setup
 
-Install **0.3.8 or later** through VCC/ALCOM, or use the named package ZIP from
+Install **0.3.9 or later** through VCC/ALCOM, or use the named package ZIP from
 GitHub Releases. The earlier `0.3.2` distribution was packaged incorrectly and
 could leave new projects without the compiler payload. Update affected projects
-to `0.3.8`; the installer will repair the compiler after Unity refreshes.
+to `0.3.9`; the installer will repair the compiler after Unity refreshes.
 
 Do not install GitHub's automatic **Source code (zip)** archive as a Unity package.
 Installable releases place the compiler in `Payload~/UdonSharp` so only the
@@ -139,7 +140,7 @@ optional samples, imported after setup completes.
 
 ### Steps
 
-1. Refresh the LogicCuteGuy repository in VCC/ALCOM and install or update LCGUdonSharp to `0.3.8`. For a local package reference, extract the named release ZIP first and reference that extracted folder:
+1. Refresh the LogicCuteGuy repository in VCC/ALCOM and install or update LCGUdonSharp to `0.3.9`. For a local package reference, extract the named release ZIP first and reference that extracted folder:
 
    ```json
    "com.logiccuteguy.lcgudonsharp": "file:../path/to/com.logiccuteguy.lcgudonsharp"
@@ -515,7 +516,7 @@ LCGUdonSharp builds on [UdonSharp](https://github.com/MerlinSan/UdonSharp), orig
 
 ## Contributing
 
-Build installable releases with `python Tools~/build_release.py --output dist/com.logiccuteguy.lcgudonsharp-0.3.8.zip`.
+Build installable releases with `python Tools~/build_release.py --output dist/com.logiccuteguy.lcgudonsharp-0.3.9.zip`.
 Run `python Tools~/test_release.py` first. A raw `git archive` is not an installable
 release. The release workflow validates the package on pull requests and `main`,
 and publishes the generated ZIP and its matching `package.json` for version tags.

@@ -6,7 +6,11 @@
         "VRC.Udon.Serialization.OdinSerializer",
         "UdonSharp.Runtime",
         "LogicCuteGuy.LCGUdonSharp.Runtime",
-        "UdonSharp.Lib"
+        "UdonSharp.Lib",
+        "Unity.TextMeshPro",
+        "Unity.ugui",
+        "Unity.Localization",
+        "Unity.Localization.Editor"
     ],
     "includePlatforms": [
         "Editor"
