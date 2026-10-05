@@ -1,5 +1,10 @@
 # LCGUdonSharp Changelog
 
+## 0.3.10 - 2026-10-05
+
+- Install the SBP compatibility package through VPM before Unity compiles scripts, preventing the VRChat SDK global `ExtensionMethods` collision on fresh installs and upgrades.
+- Keep the compatibility fix in an embedded dependency so Unity cache regeneration cannot remove it. Localization support remains available.
+
 ## 0.3.9 - 2026-10-05
 
 - Bake Unity Localization String and Asset Tables into Udon with local language selection, regional/default fallbacks, dropdowns, and change callbacks.

@@ -5,7 +5,7 @@
 [![Unity](https://img.shields.io/badge/Unity-2022.3-blue)](https://unity.com/)
 [![VRChat Worlds SDK](https://img.shields.io/badge/VRChat_Worlds_SDK-3.10.5-orange)](https://github.com/VRChat/worlds)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE.md)
-[![Package Version](https://img.shields.io/badge/version-0.3.9-informational)](package.json)
+[![Package Version](https://img.shields.io/badge/version-0.3.10-informational)](package.json)
 
 LCGUdonSharp extends the UdonSharp compiler with C# interfaces, synchronous compiler-managed `try`/`catch`, build-time `async/await` lowering, extended language constructs (`ref`/`out`, closed generics, LINQ closures, `dynamic`, `Span<T>`), and a manual packet networking layer — while keeping every modified source file inside `Packages/com.logiccuteguy.lcgudonsharp` instead of the VRChat SDK or `Assets`.
 
@@ -123,10 +123,10 @@ Udon assembly (runs in VRChat)
 
 ## Installation & Setup
 
-Install **0.3.9 or later** through VCC/ALCOM, or use the named package ZIP from
-GitHub Releases. The earlier `0.3.2` distribution was packaged incorrectly and
-could leave new projects without the compiler payload. Update affected projects
-to `0.3.9`; the installer will repair the compiler after Unity refreshes.
+Install **0.3.10 or later** through VCC/ALCOM. VPM installs the SBP compatibility
+dependency before Unity compiles, avoiding the VRChat SDK `ExtensionMethods`
+collision. The dependency stays embedded in the project so rebuilding `Library`
+does not remove the fix. Unity Localization remains supported.
 
 Do not install GitHub's automatic **Source code (zip)** archive as a Unity package.
 Installable releases place the compiler in `Payload~/UdonSharp` so only the
@@ -140,7 +140,7 @@ optional samples, imported after setup completes.
 
 ### Steps
 
-1. Refresh the LogicCuteGuy repository in VCC/ALCOM and install or update LCGUdonSharp to `0.3.9`. For a local package reference, extract the named release ZIP first and reference that extracted folder:
+1. Refresh the LogicCuteGuy repository in VCC/ALCOM and install or update LCGUdonSharp to `0.3.10`. For a manual installation, close Unity and extract **both** named release ZIPs into `Packages/com.logiccuteguy.lcgudonsharp` and `Packages/com.unity.scriptablebuildpipeline`. The SBP compatibility ZIP is attached to the `sbp-compatibility-1.21.26` release in this repository. A local package reference still needs that SBP dependency embedded in the project:
 
    ```json
    "com.logiccuteguy.lcgudonsharp": "file:../path/to/com.logiccuteguy.lcgudonsharp"
@@ -516,7 +516,8 @@ LCGUdonSharp builds on [UdonSharp](https://github.com/MerlinSan/UdonSharp), orig
 
 ## Contributing
 
-Build installable releases with `python Tools~/build_release.py --output dist/com.logiccuteguy.lcgudonsharp-0.3.9.zip`.
+Build installable releases with `python Tools~/build_release.py --output dist/com.logiccuteguy.lcgudonsharp-0.3.10.zip`.
+Build the required compatibility dependency with `python Tools~/build_sbp_compatibility.py --output dist/sbp/com.unity.scriptablebuildpipeline-1.21.26.zip`.
 Run `python Tools~/test_release.py` first. A raw `git archive` is not an installable
 release. The release workflow validates the package on pull requests and `main`,
 and publishes the generated ZIP and its matching `package.json` for version tags.

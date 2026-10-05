@@ -1,11 +1,13 @@
 import json
 import shutil
 import tempfile
+import tarfile
 import unittest
 from pathlib import Path
 from zipfile import ZipFile
 
 import build_release
+import build_sbp_compatibility
 
 
 class ReleaseTests(unittest.TestCase):
@@ -31,6 +33,25 @@ class ReleaseTests(unittest.TestCase):
             self.assertIn("Payload~/UdonSharp/Runtime/Plugins/System.Text.Encoding.CodePages.dll", names)
             manifest = json.loads(archive.read("package.json"))
             self.assertIn(manifest["samples"][0]["path"] + "/LogicCuteGuy.LCGUdonSharp.Examples.asmdef", names)
+
+    def test_sbp_dependency_is_fixed_before_any_installer_code_runs(self):
+        companion = self.root / "sbp.zip"
+        manifest = build_sbp_compatibility.build(companion)
+        with ZipFile(self.archive) as archive:
+            main = json.loads(archive.read("package.json"))
+            self.assertEqual(main["vpmDependencies"][manifest["name"]], manifest["version"])
+        with ZipFile(companion) as archive:
+            asmdef = json.loads(archive.read("Editor/Unity.ScriptableBuildPipeline.Editor.asmdef"))
+            self.assertTrue(asmdef["overrideReferences"])
+            self.assertEqual(asmdef["precompiledReferences"], [])
+            self.assertIn("Unity Companion License", archive.read("LICENSE.md").decode())
+            self.assertFalse(any(name.startswith("Tests/") for name in archive.namelist()))
+            source = build_sbp_compatibility.PACKAGE / "Tools~/Dependencies/com.unity.scriptablebuildpipeline-1.21.25.tgz"
+            with tarfile.open(source) as upstream:
+                for member in upstream.getmembers():
+                    name = member.name.removeprefix("package/")
+                    if member.isfile() and name in archive.namelist() and name.endswith((".cs", ".dll", ".meta")):
+                        self.assertEqual(archive.read(name), upstream.extractfile(member).read(), name)
 
     def test_archive_preserves_source_bytes_and_guids(self):
         with ZipFile(self.archive) as archive:

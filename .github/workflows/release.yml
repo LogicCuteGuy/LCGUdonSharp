@@ -33,10 +33,12 @@ jobs:
           subprocess.run([sys.executable, 'Tools~/build_release.py', '--output', str(archive)], check=True)
           with zipfile.ZipFile(archive) as package:
               Path('dist/package.json').write_bytes(package.read('package.json'))
+          subprocess.run([sys.executable, 'Tools~/build_sbp_compatibility.py', '--output',
+                          'dist/sbp/com.unity.scriptablebuildpipeline-1.21.26.zip'], check=True)
       - uses: actions/upload-artifact@v4
         with:
           name: vpm-package
-          path: dist/*
+          path: dist/
 
   release:
     if: github.ref_type == 'tag'
@@ -54,4 +56,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" dist/* --verify-tag --title "$RELEASE_TAG" --generate-notes
+        run: |
+          if ! gh release view sbp-compatibility-1.21.26 > /dev/null 2>&1; then
+            gh release create sbp-compatibility-1.21.26 dist/sbp/* --target "$GITHUB_SHA" --latest=false --title "SBP compatibility 1.21.26" --notes "Unity Scriptable Build Pipeline 1.21.25 with editor DLL auto-references disabled to prevent the VRChat SDK ExtensionMethods collision. Distributed under the upstream Unity Companion License."
+          fi
+          gh release create "$RELEASE_TAG" dist/*.zip dist/package.json --verify-tag --title "$RELEASE_TAG" --generate-notes
