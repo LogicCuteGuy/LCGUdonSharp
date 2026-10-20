@@ -1,5 +1,10 @@
 # LCGUdonSharp Changelog
 
+## 0.3.11 - 2026-10-20
+
+- Warn instead of blocking when the installed VRChat Worlds SDK differs from the supported version: the payload (built from SDK 3.10.5) still installs, with a reminder that `Tools > LCGUdonSharp > Restore` reverts to the backed-up original UdonSharp.
+- Declare the `LCGUdonSharp Examples` sample in `package.json` so Package Manager shows it (import after automatic compiler installation completes).
+
 ## 0.3.10 - 2026-10-05
 
 - Install the SBP compatibility package through VPM before Unity compiles scripts, preventing the VRChat SDK global `ExtensionMethods` collision on fresh installs and upgrades.
