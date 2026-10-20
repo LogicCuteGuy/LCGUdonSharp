@@ -25,5 +25,12 @@
   "vpmDependencies": {
     "com.vrchat.worlds": "3.10.5",
     "com.unity.scriptablebuildpipeline": "1.21.26"
-  }
+  },
+  "samples": [
+    {
+      "displayName": "LCGUdonSharp Examples",
+      "description": "Import after automatic compiler installation completes.",
+      "path": "Samples~/Examples"
+    }
+  ]
 }

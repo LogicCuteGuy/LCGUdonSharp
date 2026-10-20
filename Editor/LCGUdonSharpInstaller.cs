@@ -138,8 +138,8 @@ namespace LogicCuteGuy.LCGUdonSharp.Installer
 
                 if (!string.Equals(worldsPackage.version, SupportedSdkVersion, StringComparison.Ordinal))
                 {
-                    Debug.LogError($"[LCGUdonSharp] VRChat Worlds SDK {worldsPackage.version} is not supported. Expected {SupportedSdkVersion}; no files were changed.");
-                    return;
+                    // ponytail: payload is built from SDK 3.10.5; other versions install untested. Original UdonSharp is backed up per SDK version (Restore menu).
+                    Debug.LogWarning($"[LCGUdonSharp] VRChat Worlds SDK {worldsPackage.version} is untested. Payload is built for {SupportedSdkVersion}; installing anyway (use Tools/LCGUdonSharp/Restore to revert).");
                 }
 
                 string payload = NormalizePath(Path.Combine(installerPackage.resolvedPath, "Payload~", "UdonSharp"));
