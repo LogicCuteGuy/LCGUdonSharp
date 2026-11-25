@@ -18,23 +18,37 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Test release packaging
-        run: python 'Tools~/test_release.py'
-      - name: Build installable package
+      - name: Validate and zip package
         shell: python
         run: |
-          import json, os, subprocess, sys, zipfile
+          import json, os, re, zipfile
           from pathlib import Path
+
+          root = Path('.')
           manifest = json.loads(Path('package.json').read_text())
           version = manifest['version']
           if os.environ['GITHUB_REF_TYPE'] == 'tag':
               assert os.environ['GITHUB_REF_NAME'] == version, 'Tag must match package version'
+
+          def hidden(path):
+              return any(part.startswith('.') or part == 'dist' for part in path.parts)
+
+          files = [p for p in sorted(root.rglob('*')) if p.is_file() and not hidden(p)]
+          guids = set()
+          for path in files:
+              if path.suffix == '.meta':
+                  match = re.search(r'^guid: ([0-9a-f]{32})$', path.read_text(), re.M)
+                  assert match and match[1] not in guids, f'Missing or duplicate GUID: {path}'
+                  guids.add(match[1])
+              elif not any(part.endswith('~') and part != path.name for part in path.parts[:-1]):
+                  assert Path(str(path) + '.meta').is_file(), f'Missing metadata: {path}.meta'
+
           archive = Path('dist') / f"{manifest['name']}-{version}.zip"
-          subprocess.run([sys.executable, 'Tools~/build_release.py', '--output', str(archive)], check=True)
-          with zipfile.ZipFile(archive) as package:
-              Path('dist/package.json').write_bytes(package.read('package.json'))
-          subprocess.run([sys.executable, 'Tools~/build_sbp_compatibility.py', '--output',
-                          'dist/sbp/com.unity.scriptablebuildpipeline-1.21.26.zip'], check=True)
+          archive.parent.mkdir(exist_ok=True)
+          with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as package:
+              for path in files:
+                  package.write(path, path.as_posix())
+          Path('dist/package.json').write_bytes(Path('package.json').read_bytes())
       - uses: actions/upload-artifact@v4
         with:
           name: vpm-package
@@ -56,8 +70,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          if ! gh release view sbp-compatibility-1.21.26 > /dev/null 2>&1; then
-            gh release create sbp-compatibility-1.21.26 dist/sbp/* --target "$GITHUB_SHA" --latest=false --title "SBP compatibility 1.21.26" --notes "Unity Scriptable Build Pipeline 1.21.25 with editor DLL auto-references disabled to prevent the VRChat SDK ExtensionMethods collision. Distributed under the upstream Unity Companion License."
-          fi
-          gh release create "$RELEASE_TAG" dist/*.zip dist/package.json --verify-tag --title "$RELEASE_TAG" --generate-notes
+        run: gh release create "$RELEASE_TAG" dist/*.zip dist/package.json --verify-tag --title "$RELEASE_TAG" --generate-notes

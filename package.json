@@ -1,10 +1,10 @@
 {
   "name": "com.logiccuteguy.lcgudonsharp",
   "displayName": "LCGUdonSharp",
-  "version": "0.3.12",
+  "version": "0.5.0",
   "unity": "2022.3",
   "license": "MIT",
-  "description": "Adds source-interface support to UdonSharp and installs the compiler inside LCGUdonSharp instead of VRChat Worlds.",
+  "description": "Adds interfaces, try/catch, async/await and extended C# to the VRChat SDK's UdonSharp through compiler hooks. The SDK's UdonSharp stays installed and unmodified.",
   "keywords": [
     "udonsharp",
     "udon",
@@ -12,24 +12,18 @@
     "worlds",
     "compiler",
     "interfaces",
-    "async-await",
-    "networking"
+    "async-await"
   ],
   "author": {
     "name": "LogicCuteGuy"
   },
-  "dependencies": {
-    "com.unity.localization": "1.4.5",
-    "com.unity.scriptablebuildpipeline": "1.21.25"
-  },
   "vpmDependencies": {
-    "com.vrchat.worlds": "3.x.x >=3.10.5",
-    "com.unity.scriptablebuildpipeline": "1.21.26"
+    "com.vrchat.worlds": ">=3.10.6"
   },
   "samples": [
     {
       "displayName": "LCGUdonSharp Examples",
-      "description": "Import after automatic compiler installation completes.",
+      "description": "Interface, async, extended-language and ScriptableObject examples.",
       "path": "Samples~/Examples"
     }
   ]

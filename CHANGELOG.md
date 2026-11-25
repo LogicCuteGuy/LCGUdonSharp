@@ -1,5 +1,21 @@
 # LCGUdonSharp Changelog
 
+## 0.5.0 - 2026-11-26
+
+- **Breaking:** move the networking runtime (`LCGRuntime`, `LCGRuntimePlayer`, `LCGNetworkZone`, `LCGZoneOwnershipGuard`, `LCGManualObjectSync`, `[LCGPacket]`) and its scene processor to the separate `com.logiccuteguy.lcgnetwork` package. Script and asmdef GUIDs are unchanged, so scene references survive; the runtime assembly is renamed `LogicCuteGuy.LCGNetwork.Runtime` (update asmdef references made by name).
+- **Breaking:** hook the VRChat SDK's UdonSharp instead of replacing it. The installer, `Payload~`, the bundled compiler copy and the **Tools > LCGUdonSharp** menu are gone. The LCG compiler (`UdonSharp.LCGCompiler`) compiles into the SDK's `UdonSharp.Editor` through an `.asmref`, and Harmony redirects `UdonSharpCompilerV1.Compile`/`CompileSync`/`WaitForCompile` to it. Runtime additions (`VRCAsync`, `UdonException`, the `System.Text.Json` facade) join `UdonSharp.Runtime` the same way.
+- **Breaking:** remove compiler-side networking: `SendLCGNetworkEvent`, `ForceSendPacket`, `LCGNetwork.RequestObjectSync` lowering, the `[LCGPacket]` ABI and the **LCG network diagnostics** setting. `com.logiccuteguy.lcgnetwork` handles `[LCGPacket]` on compiled programs and is no longer a dependency. Networking samples were removed.
+- Require Worlds SDK `>=3.10.6 <3.11.0`; the compiler now includes the SDK 3.10.6 fixes for named arguments and enum comparison operators.
+- Move **Async task frame capacity** to **Project Settings > Udon Sharp > LCGUdonSharp** (`ProjectSettings/LogicCuteGuy.LCGUdonSharp.json`).
+- Upgrading from 0.4.x: reinstall `com.vrchat.worlds` so the SDK's `Integrations/UdonSharp` is restored with its original GUIDs.
+
+## 0.4.0 - 2026-11-02
+
+- **Breaking:** move localization to the separate `com.logiccuteguy.lcglocalization` package, which also works with the VRChat SDK's UdonSharp. Install it to keep using `LCGLocalization`; existing scene references survive because script GUIDs are unchanged.
+- Remove the Unity Localization and Scriptable Build Pipeline dependencies, which only localization needed.
+- Accept any VRChat Worlds SDK 3.x from 3.10.5 up instead of pinning 3.10.5, so VPM no longer downgrades newer SDKs. Newer versions install with the existing untested-version warning.
+- Repair the compiler's script import after installation, which could otherwise hide every U# program on a fresh install.
+
 ## 0.3.11 - 2026-10-20
 
 - Warn instead of blocking when the installed VRChat Worlds SDK differs from the supported version: the payload (built from SDK 3.10.5) still installs, with a reminder that `Tools > LCGUdonSharp > Restore` reverts to the backed-up original UdonSharp.

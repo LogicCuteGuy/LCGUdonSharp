@@ -1,15 +1,15 @@
 # LCGUdonSharp
 
-**Interface-enabled UdonSharp compiler for VRChat — installed as its own package instead of patching `com.vrchat.worlds`.**
+**Interface-enabled UdonSharp compiler for VRChat — hooks the SDK's UdonSharp instead of replacing it.**
 
 [![Unity](https://img.shields.io/badge/Unity-2022.3-blue)](https://unity.com/)
-[![VRChat Worlds SDK](https://img.shields.io/badge/VRChat_Worlds_SDK-3.10.5-orange)](https://github.com/VRChat/worlds)
+[![VRChat Worlds SDK](https://img.shields.io/badge/VRChat_Worlds_SDK-3.10.6-orange)](https://github.com/VRChat/worlds)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE.md)
 [![Package Version](https://img.shields.io/badge/version-0.3.10-informational)](package.json)
 
 LCGUdonSharp extends the UdonSharp compiler with C# interfaces, synchronous compiler-managed `try`/`catch`, build-time `async/await` lowering, extended language constructs (`ref`/`out`, closed generics, LINQ closures, `dynamic`, `Span<T>`), and a manual packet networking layer — while keeping every modified source file inside `Packages/com.logiccuteguy.lcgudonsharp` instead of the VRChat SDK or `Assets`.
 
-> **Status:** interfaces, synchronous exceptions, async lowering, and extended-language support are ready for world testing. Manual packet networking (`[LCGPacket]` / `LCGNetworkZone`) is experimental; its wire protocol may change between versions.
+> **Status:** interfaces, synchronous exceptions, async lowering, and extended-language support are ready for world testing.
 
 ## Table of Contents
 
@@ -37,11 +37,8 @@ LCGUdonSharp extends the UdonSharp compiler with C# interfaces, synchronous comp
 | **Synchronous Exceptions** | Compiler-managed `try`/`catch`/`finally`, explicit throws, rethrow, and guarded null, index, and integral divide/modulo failures without relying on unavailable Udon exception opcodes. |
 | **Extended Language** | `ref`/`out` (including `out var` and recursion), closed generics, interface diamonds, LINQ lambdas with captures, proven `dynamic`, array-backed `Span<T>`. |
 | **C# Collections & JSON** | Exact `List<T>` and `Dictionary<TKey,TValue>` syntax lowered to `DataList`/`DataDictionary`, plus a VRCJson-backed `System.Text.Json` facade and manual synced-collection payloads. |
-| **Text and Asset Localization** | Unity String/Asset Tables bake into Udon. Direct manager calls, dropdowns, callbacks, Smart variables/choose/plural, sprite/texture/audio/prefab variants and fallback. See the [Unity setup](Example/Localization/UnityLocalization.md). |
 | **ScriptableObject Data** | Ordinary custom `ScriptableObject` assets, nested asset references and derived assets in base-typed fields/arrays. Read-only snapshots support typed field reads, `is`, `as` and checked casts; array reads return copies. See the [shop and equipment examples](Example/ScriptableObjects/README.md). |
-| **Manual Packet Networking** *(experimental)* | `[LCGPacket]` fields and methods with versioned frames, authority checks, replay protection, field coalescing, verified-sender callbacks, targeted PlayerObject delivery. |
-| **Network Zones** | `LCGNetworkZone` scopes packet recipients and ownership to a trigger volume; manual object-sync replaces `VRC_ObjectSync` inside zones. |
-| **Clean Installation** | Automatic, idempotent setup with backup/restore — no modified files inside `com.vrchat.worlds` or `Assets/`. Installer state lives in `ProjectSettings/LogicCuteGuy.LCGUdonSharp.json`; SDK backups live in `Library/LogicCuteGuy.LCGUdonSharp/Backups`. |
+| **Hook, not replace** | The SDK's bundled UdonSharp stays installed and unmodified. LCGUdonSharp joins its assemblies through `.asmref` files and redirects compilation with Harmony, so nothing is copied, backed up, or restored. |
 
 ---
 
@@ -56,7 +53,6 @@ These names appear in the docs, the folder layout, and Unity's UI. Two of them s
 | **U# assembly definition** (`UdonSharpAssemblyDefinition`) | A different asset that registers one Unity assembly definition (`.asmdef`) for UdonSharp compilation through its single `sourceAssembly` field. It does **not** hold compiled code. This package uses the `*.USharp.asset` suffix for these: `Example/LogicCuteGuy.LCGUdonSharp.Examples.USharp.asset` and `UdonSharp/Runtime/LCGBehaviours/LogicCuteGuy.LCGUdonSharp.Runtime.USharp.asset`. |
 | **Assembly scanning** | How the compiler finds your behaviours. `Assembly-CSharp` is always included. Every other assembly must be registered with a U# assembly definition, otherwise its `UdonSharpBehaviour` classes are invisible to UdonSharp even though Unity compiles them without errors. |
 | **Extern** | A Unity/SDK method that maps to a built-in Udon node (`Debug.Log`, `transform.Rotate`, `Networking.SetOwner`, …). It executes as one native Udon instruction, so a fault raised inside an extern cannot be caught by `try`/`catch`. |
-| **Packet frame** | The versioned serialized message sent by a `[LCGPacket]` field write or packet-method call. Frames carry authority checks and replay protection. |
 
 > **Rule of thumb:** one U# script needs one program asset with the **same name** in the **same folder**. One `.asmdef` needs one U# assembly definition, and its **name does not matter** (this package uses `*.USharp.asset`).
 
@@ -64,35 +60,26 @@ These names appear in the docs, the folder layout, and Unity's UI. Two of them s
 
 ## How It Works
 
-### 1. Automatic installer
+### 1. Compiler hook
 
-After the package is imported, a small bootstrap assembly (`Editor/LCGUdonSharpInstaller.cs`) runs automatically:
+Nothing in `com.vrchat.worlds` is edited or replaced:
 
 ```
-1. Verify VRChat Worlds SDK 3.10.5 is installed
-2. Back up SDK-bundled Integrations/UdonSharp
-   → Library/LogicCuteGuy.LCGUdonSharp/Backups
-3. Install the interface-enabled compiler at
-   → Packages/com.logiccuteguy.lcgudonsharp/UdonSharp
-4. Remove the SDK-bundled copy so Unity sees
-   exactly one set of UdonSharp.* assemblies
+Packages/com.logiccuteguy.lcgudonsharp
+├─ Editor/UdonSharp.Editor.asmref    → compiles into the SDK's UdonSharp.Editor
+│  ├─ Compiler/                      LCG compiler (namespace UdonSharp.LCGCompiler)
+│  ├─ Serialization/                 List/Dictionary + ScriptableObject data serializers
+│  └─ LCGUdonSharpHook.cs            Harmony entry hook
+└─ Runtime/UdonSharp.Runtime.asmref  → adds VRCAsync, UdonException, System.Text.Json facade
 ```
 
-Setup is **idempotent** — if an SDK/package refresh restores the bundled copy, setup runs again. On any SDK version other than `3.10.5`, setup stops instead of modifying an untested package.
+On every domain reload `LCGUdonSharpHook` patches the stock `UdonSharpCompilerV1.Compile`, `CompileSync` and `WaitForCompile` so they run the LCG compiler. It also resets the LCG compiler's assembly cache along with the stock one, maps List/Dictionary/ScriptableObject data fields to Udon types, and registers their serializers. The stock compiler stays loaded but goes unused. Removing the package restores stock UdonSharp after a recompile.
 
-Everything setup writes outside the package source:
-
-| Path | Purpose |
-|------|---------|
-| `ProjectSettings/LogicCuteGuy.LCGUdonSharp.json` | Installer state, SDK version, and automatic-setup suspension flag. |
-| `Library/LogicCuteGuy.LCGUdonSharp/Backups` | Backed-up SDK-bundled UdonSharp, used by repair and restore. |
-| `Library/LogicCuteGuy.LCGUdonSharp` | Installer workspace. |
-
-Setup and restore also recognize legacy install, state, and workspace locations so upgrades converge on one compiler copy.
+The LCG compiler is pinned to the SDK's UdonSharp internals, so the package accepts Worlds SDK `>=3.10.6 <3.11.0`. If an SDK update renames a hooked method, the hook logs a `MissingMethodException` when the editor loads, and stock UdonSharp compiles instead, so LCG-only syntax shows up as stock compiler errors.
 
 ### 2. Compiler extensions
 
-The compiler keeps the original `UdonSharp` namespaces and assembly names, then adds lowering passes:
+The LCG compiler is UdonSharp's compiler with these lowering passes added:
 
 ```
 Your C# source
@@ -103,58 +90,43 @@ Your C# source
    ├─ ref/out, closures,
    │  closed generics,
    │  dynamic, Span<T> ────► concrete array/offset/length locals + loops
-   ├─ List/Dictionary/JSON ─► DataList/DataDictionary + VRCJson helpers
-   └─ [LCGPacket] ─────────► versioned packet frames + mailbox delivery
+   └─ List/Dictionary/JSON ─► DataList/DataDictionary + VRCJson helpers
    │
    ▼
 Udon assembly (runs in VRChat)
 ```
 
-### 3. Manual packet networking
-
-`[LCGPacket]` does **not** use native Udon variable sync. Instead:
-
-- Assigning a packet field **queues** a send — repeated assignments in one frame are coalesced to the latest value; unchanged values are skipped; `ForceSendPacket(nameof(field))` bypasses suppression.
-- Packet methods are delivered through a PlayerObject mailbox; `SendCustomNetworkEvent(...)` is lowered to packet delivery only when the target method has `[LCGPacket]`.
-- Frames are versioned and validated with authority checks and replay protection.
-- Owners provide snapshots when players are restored; departing-player state is discarded.
-
 ---
 
 ## Installation & Setup
 
-Install **0.3.10 or later** through VCC/ALCOM. VPM installs the SBP compatibility
-dependency before Unity compiles, avoiding the VRChat SDK `ExtensionMethods`
-collision. The dependency stays embedded in the project so rebuilding `Library`
-does not remove the fix. Unity Localization remains supported.
+Install through VCC/ALCOM, or add a local reference:
 
-Do not install GitHub's automatic **Source code (zip)** archive as a Unity package.
-Installable releases place the compiler in `Payload~/UdonSharp` so only the
-bootstrap installer compiles before the SDK compiler is replaced. Examples are
-optional samples, imported after setup completes.
+```json
+"com.logiccuteguy.lcgudonsharp": "file:../path/to/com.logiccuteguy.lcgudonsharp"
+```
+
+Open Unity and let it compile. There is no installer and nothing to set up. Examples are optional samples.
 
 ### Requirements
 
 - Unity **2022.3**
-- VRChat Worlds SDK **3.10.5** (strict — other versions are refused)
+- VRChat Worlds SDK **3.10.6** (`>=3.10.6 <3.11.0`)
 
-### Steps
+### Upgrading from 0.4.x
 
-1. Refresh the LogicCuteGuy repository in VCC/ALCOM and install or update LCGUdonSharp to `0.3.10`. For a manual installation, close Unity and extract **both** named release ZIPs into `Packages/com.logiccuteguy.lcgudonsharp` and `Packages/com.unity.scriptablebuildpipeline`. The SBP compatibility ZIP is attached to the `sbp-compatibility-1.21.26` release in this repository. A local package reference still needs that SBP dependency embedded in the project:
+0.4.x deleted the SDK's bundled UdonSharp and ran a copy from this package. If an SDK update restored the bundled copy, Unity gave its files new GUIDs, while your program assets still point at the original ones. Either way, the SDK copy has to come back intact:
 
-   ```json
-   "com.logiccuteguy.lcgudonsharp": "file:../path/to/com.logiccuteguy.lcgudonsharp"
-   ```
+1. Close Unity.
+2. Update LCGUdonSharp to 0.5.0. This removes the 0.4.x compiler copy.
+3. Reinstall `com.vrchat.worlds` in VCC/ALCOM so `Integrations/UdonSharp` is present with its original metas.
+4. Open Unity and run **VRChat SDK > Udon Sharp > Refresh All UdonSharp Assets**.
 
-2. Open Unity and let it compile. The installer verifies the SDK, backs up the bundled UdonSharp, and installs the compiler automatically.
-
-3. (Optional) Force setup any time via **Tools > LCGUdonSharp > Install or Repair**.
-
-4. Build/test your world as usual.
+`SendLCGNetworkEvent`, `ForceSendPacket`, `LCGNetwork.RequestObjectSync` and the **LCG network diagnostics** setting were removed with the compiler-side networking.
 
 ### Uninstalling
 
-> **Important:** Use **Tools > LCGUdonSharp > Restore VRChat UdonSharp and Disable Auto Setup** *before* removing the package. This restores the backed-up SDK copy and removes the generated compiler folder.
+Remove the package. The SDK's UdonSharp was never modified, so it compiles on its own after the next domain reload. Scripts that use LCG-only syntax then report errors from the stock compiler.
 
 ---
 
@@ -339,67 +311,6 @@ The compiler adds one hidden synced JSON string and composes it into `OnPreSeria
 
 Normal SDK-supported binary APIs remain available: `byte[]`, bitwise operators, `BitConverter`, `Buffer.BlockCopy`, UTF-8 encoding, and `DataToken.Bitcast`. The intrinsic facade intentionally occupies `System.Text.Json`; installing a separate real `System.Text.Json` assembly can create a namespace/type conflict. Calls made outside compiler-lowered UdonSharp behaviours throw `NotSupportedException`.
 
-### Manual packet networking
-
-**Coalesced field with callback:**
-
-```csharp
-[LCGPacket(
-    Authority = LCGPacketAuthority.ObjectOwner,
-    Callback = nameof(OnScoreChanged))]
-[SerializeField] private int score;
-
-public void OnScoreChanged(VRCPlayerApi sender) { /* verified sender */ }
-
-// Repeated assignments in one frame send only the latest value:
-score++; score++; score++;        // → one packet with final value
-ForceSendPacket(nameof(score));   // → bypass suppression, always send
-```
-
-**Packet methods — broadcast vs. targeted:**
-
-```csharp
-// Broadcast to everyone else (lowered to mailbox delivery because of [LCGPacket])
-SendCustomNetworkEvent(NetworkEventTarget.Others,
-    nameof(ReceiveAnnouncement), "Broadcast #1", transform.position);
-
-// Targeted delivery to one player
-SendLCGNetworkEvent(target, nameof(ReceiveAnnouncement),
-    "Targeted #1", transform.position);
-
-// Direct call is always local — no packet created
-ReceiveAnnouncement("Local-only #1", transform.position);
-
-[LCGPacket(Authority = LCGPacketAuthority.Any)]
-public void ReceiveAnnouncement(string message, Vector3 origin) { }
-```
-
-Public `void` methods support up to eight supported arguments. Packet field writes require object ownership — call `Networking.SetOwner(Networking.LocalPlayer, gameObject)` first.
-
-**Network zones:** add `LCGNetworkZone` to a trigger collider to restrict descendant packet recipients and ownership to players inside the trigger. Inside zones, `VRC_ObjectSync` is replaced with a manual relay; script transforms sync on demand via `LCGNetwork.RequestObjectSync(gameObject)` (pickups sync automatically while held).
-
-Zone entry and `OnPlayerRestored` request current scene fields and object state. Local snapshot recovery makes up to five additional attempts with bounded backoff, stops on exit, and restarts after a relevant restore event. Automatic ownership reassignment after a disconnect is repaired by the newly assigned owner through ownership callbacks and a finite recovery window. Existing member ownership is preserved; if the zone is empty, VRChat's fallback owner remains until a member enters.
-
-Object motion uses a separate latest-state queue, rather than the gameplay RPC FIFO. Unsent samples of the same object/recipient are replaced, with teleport and re-entry discontinuities preserved. Multiple objects for one recipient share a mailbox event, up to 900 bytes. The motion scheduler sends at most 40 events/second and budgets approximately 6 KB/second including a conservative overhead allowance; it pauses when networking is clogged or the SDK's outgoing queue exceeds eight events. These are motion budgets, not a cap on unrelated gameplay or native Udon traffic. More recipients share this budget, so the delivered sample rate decreases as a zone fills. Remote objects interpolate samples with bounded velocity prediction; remote rigidbodies remain kinematic until ownership transfers to the local player.
-
-Ownership handoff is initiated by the current object owner. The guard allows that owner to hand off after leaving the zone while continuing to reject outside claimants and outside destination owners. Rebuild the world after updating: older builds do not understand the motion batch envelope. `LCGRuntime.PendingMotionCount`, `MotionBatchesSent`, and `LastMotionBatchBytes` expose local transport diagnostics. Validate crowded-world FPS and latency with multiple VRChat clients; editor tests exercise routing and queue policy, not real network throughput.
-
-Third-party behaviours that still use native `[UdonSynced]` fields remain fail-closed by default. For compatibility with an existing hierarchy, enable **Allow Native Sync Passthrough** on the zone. This keeps those behaviours working and lets the zone scope LCG packets, ownership, and converted `VRC_ObjectSync` traffic, but the native synced fields still broadcast to the whole instance and are not optimized by the zone. Continuous behaviours with no synced fields are accepted automatically.
-
-Zone colliders in **separate hierarchies may overlap** — each scene object belongs to its nearest ancestor zone. Zone colliders in the same parent/child hierarchy may **not** overlap; that configuration fails the build before helpers are generated.
-
-<details>
-<summary><b>PlayerObject networking notes</b></summary>
-
-- `[LCGPacket]` fields/methods work on `VRCPlayerObject` templates; each clone is addressed by template + owning player.
-- Wait for `OnPlayerRestored`, then use `Networking.FindComponentInPlayerObjects(player, templateBehaviour)`.
-- Use `Authority = LCGPacketAuthority.ObjectOwner` for fields only their player should change (default is `Any`).
-- PlayerObject templates and `LCGNetworkZone` must be in **separate hierarchies** — combining them fails the build.
-- Packet fields are session-only: not persisted by VRChat, not replayed for late joiners.
-- After upgrading, recompile all UdonSharp programs and rebuild the world (protocol version 2).
-
-</details>
-
 ---
 
 ## Examples
@@ -410,7 +321,6 @@ The `Example/` folder contains runnable scenes and scripts for every feature. Op
 |---------|---------|-------------|
 | [`Example/AsyncAwait`](Example/AsyncAwait/README.md) | Async lowering | `Task.Yield()`, `Task.Delay`, string/image/video awaits, GPU readback, serialization, Creator Economy. |
 | [`Example/Interfaces`](Example/Interfaces/README.md) | Interface MVP | `INumberOperation` with Add/Multiply implementations invoked through the interface. Input `10` → `15`, `30`. |
-| [`Example/Networking`](Example/Networking/README.md) | LCG manual packets | Coalesced packet fields with callbacks, broadcast/targeted packet methods, zone-scoped object sync. |
 | [`Example/GenericRestrictions`](Example/GenericRestrictions/README.md) | Collections and restrictions | Runnable collection/JSON/binary example plus rejected open generics, interfaces, multiple bases, and `Task<T>` notes. |
 | [`Example/ExtendedLanguage`](Example/ExtendedLanguage/README.md) | Extended C# | `try`/`catch`/`finally`, `ref`/`out`, closed generics & interface diamonds, LINQ closures, `dynamic`, `Span<T>`. |
 
@@ -446,7 +356,6 @@ Two different assets are involved (definitions in [Key terms](#key-terms)):
 - Array-backed local `Span<T>` (indexing, `Length`, `Fill`, `ToArray`, `Clear`)
 - Exact `List<T>` and `Dictionary<TKey,TValue>` with common members, iteration, nesting, JSON conversion, and Manual-mode JSON synchronization
 - `byte[]`, bitwise operators, `BitConverter`, `Buffer.BlockCopy`, UTF-8 encoding, and `DataToken.Bitcast`
-- `[LCGPacket]` fields and `void` methods (≤ 8 args), zones, PlayerObject mailboxes
 - Synchronous `try`/`catch`/`finally`, approved typed catches, catch-all, explicit `throw new`, rethrow, and guarded null/bounds/integral-zero failures
 
 </details>
@@ -460,12 +369,9 @@ Two different assets are involved (definitions in [Key terms](#key-terms)):
 - Nested awaits, explicit returns in async, direct `Task<T>` result assignment, multiple simultaneous SDK awaits
 - `await` inside `try`, catch filters, arbitrary thrown expressions, unsupported exception types/constructors/members, and catch variables that escape their catch
 - Catching native extern/VM faults, cross-behaviour or custom-event propagation, floating-point divide-by-zero, overflow, invalid casts, or SDK domain failures
-- Zone-scoped native Continuous fields/interpolation and networked Udon Graph behaviours **inside zones**
-- Overlapping parent/child zones; `[UdonSynced]` fields under a zone (fail closed until per-zone variants ship)
 
 </details>
 
-Zone colliders in separate hierarchies may overlap. Parent/child zone colliders cannot overlap; scene objects otherwise belong only to their nearest ancestor `LCGNetworkZone`.
 
 ---
 
@@ -473,8 +379,7 @@ Zone colliders in separate hierarchies may overlap. Parent/child zone colliders 
 
 | Command | Purpose |
 |---------|---------|
-| **Tools > LCGUdonSharp > Install or Repair** | Force setup to re-run (backup + install + remove bundled copy). |
-| **Tools > LCGUdonSharp > Restore VRChat UdonSharp and Disable Auto Setup** | Restore the SDK-bundled copy, remove the generated compiler folder, and suspend automatic setup — run this **before** uninstalling. |
+| **Edit > Project Settings > Udon Sharp > LCGUdonSharp** | Async task frame capacity (1-256 frames per behaviour), saved in `ProjectSettings/LogicCuteGuy.LCGUdonSharp.json`. |
 | **Assets > Create > U# Script** | Create a U# script **and** its paired program asset, already linked. Must be saved under `Assets/` or `Packages/`; anything else is refused. |
 | **Assets > Create > U# Assembly Definition** | Create a `UdonSharpAssemblyDefinition` registration asset. With the `.asmdef` selected it is assigned to `sourceAssembly` automatically. |
 | **VRChat SDK > Udon Sharp > Refresh All UdonSharp Assets** | Recompile every UdonSharp program asset in the project. |
@@ -493,8 +398,6 @@ There are no example-builder menu commands; the example scene and paired `.asset
 | Script compiles in Unity but UdonSharp ignores it | Its assembly is not registered. `Assembly-CSharp` is always scanned; scripts inside an `.asmdef` need a `UdonSharpAssemblyDefinition` (**Assets > Create > U# Assembly Definition**) pointing at that `.asmdef`. |
 | Edited a U# assembly definition but nothing recompiles | Changing `sourceAssembly` resets the compiler's assembly cache — run **VRChat SDK > Udon Sharp > Refresh All UdonSharp Assets** to rebuild. |
 
-LCG network logging is off by default. Enable **Edit > Project Settings > Udon Sharp > Debugging > LCG network diagnostics** before compiling to include pickup and packet-delivery output, then recompile UdonSharp programs.
-
 ---
 
 ## Troubleshooting
@@ -502,25 +405,17 @@ LCG network logging is off by default. Enable **Edit > Project Settings > Udon S
 | Symptom | Fix |
 |---------|-----|
 | *"The associated script cannot be loaded"* | The `.cs` is missing its paired `UdonSharpProgramAsset`. Use **Assets > Create > U# Script** so Unity generates both files together, or copy the `.asset` along with the `.cs`. |
-| Installer stops immediately | SDK version must be exactly `3.10.5`. Setup refuses other versions by design. |
-| Duplicate `UdonSharp.*` assemblies | Run **Tools > LCGUdonSharp > Install or Repair** — the SDK's bundled copy may have been restored. |
-| Packet fields not syncing after upgrade | Protocol is versioned (v2): recompile all UdonSharp programs and rebuild the world. |
-| Build fails around `LCGNetworkZone` | Zones fail closed on native `[UdonSynced]` fields (unless **Allow Native Sync Passthrough** is enabled), Udon Graph behaviours, overlapping parent/child zones, and PlayerObject templates sharing a hierarchy. Continuous behaviours without synced fields are safe. Zones in separate hierarchies may overlap. |
-| Need to uninstall | Run **Restore VRChat UdonSharp and Disable Auto Setup** first, then remove the package. |
+| `MissingMethodException` from `LCGUdonSharpHook` on load | The installed Worlds SDK changed a hooked UdonSharp method. Use an SDK version inside this package's range. |
+| Program assets lost their script after upgrading from 0.4.x | The SDK's UdonSharp metas carry regenerated GUIDs. Reinstall `com.vrchat.worlds` from VCC, then refresh all UdonSharp assets. |
+| Need to uninstall | Remove the package; nothing else to undo. |
 
 ---
 
 ## Acknowledgements
 
-LCGUdonSharp builds on [UdonSharp](https://github.com/MerlinSan/UdonSharp), originally created by Merlin, and on the VRChat Worlds SDK. The compiler retains UdonSharp's original namespaces and assembly names so existing projects continue to work unchanged.
+LCGUdonSharp builds on [UdonSharp](https://github.com/MerlinSan/UdonSharp), originally created by Merlin, and on the VRChat Worlds SDK. It hooks the SDK's UdonSharp rather than replacing it, so existing projects keep the SDK's assemblies and asset GUIDs.
 
 ## Contributing
-
-Build installable releases with `python Tools~/build_release.py --output dist/com.logiccuteguy.lcgudonsharp-0.3.10.zip`.
-Build the required compatibility dependency with `python Tools~/build_sbp_compatibility.py --output dist/sbp/com.unity.scriptablebuildpipeline-1.21.26.zip`.
-Run `python Tools~/test_release.py` first. A raw `git archive` is not an installable
-release. The release workflow validates the package on pull requests and `main`,
-and publishes the generated ZIP and its matching `package.json` for version tags.
 
 Bug reports, feature requests, and pull requests are welcome in the project repository. When reporting a compiler diagnostic, include the Unity version, the Worlds SDK version, and the smallest snippet that reproduces the issue.
 
